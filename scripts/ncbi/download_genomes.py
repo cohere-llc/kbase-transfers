@@ -16,7 +16,7 @@ import logging
 import argparse
 from datetime import datetime
 
-from minio_client import MinioClient
+from kbase_transfers import MinioClient
 
 minio_bucket = "cdm-lake"
 minio_path_prefix = "tenant-general-warehouse/kbase/datasets/ncbi/"

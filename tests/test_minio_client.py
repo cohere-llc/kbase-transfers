@@ -1,6 +1,6 @@
 # Test for the MinIO client using a local MinIO server
 import unittest
-from minio_client import MinioClient
+from kbase_transfers import MinioClient
 import os
 import tempfile
 

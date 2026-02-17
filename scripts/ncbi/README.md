@@ -47,9 +47,9 @@ Only a subset of the files in each record subfolder are downloaded, following th
 * `G`: GenBank
 * `R`: RefSeq
 
-The script uses a temporary local folder for staging files prior to uploading them to a MinIO instance. By default,
-the script expects a running MinIO instance set up for testing (see below). If the following environment variables
-are set, they will be used as credentials (making it usable in the lakehouse for real transfers):
+The script uses a temporary local folder for staging files prior to uploading them to a MinIO instance. The MinIO client is provided by the shared `kbase_transfers` package. 
+
+By default, the script expects a running MinIO instance set up for testing (see [Testing with MinIO](#testing-with-minio) or the [main README](../../README.md#testing-with-containerized-minio)). If the following environment variables are set, they will be used as credentials (making it usable in the lakehouse for real transfers):
 - `MINIO_ACCESS_KEY`
 - `MINIO_SECRET_KEY`
 - `MINIO_ENDPOINT_URL`
@@ -59,25 +59,47 @@ least one file or subfolder.
 
 ## Install Dependencies and Run Tests
 
-### MinIO Test Server
+### Install the kbase_transfers package
 
-Set up a local MinIO server if testing locally (requires docker or podman)
+From the repository root:
 ```bash
-docker run -p 9000:9000 -p 9001:9001 -e "MINIO_ROOT_USER=minioadmin" -e "MINIO_ROOT_PASSWORD=minioadmin" -d docker.io/minio/minio server /data --console-address ":9001"
+pip install -e .
+```
+
+This installs the shared `kbase_transfers` package in editable mode, making the MinIO client available to all scripts.
+
+### Testing with MinIO
+
+### Testing with MinIO
+
+Set up a local MinIO server if testing locally (requires docker or podman):
+
+```bash
+docker run -p 9000:9000 -p 9001:9001 \
+  -e "MINIO_ROOT_USER=minioadmin" \
+  -e "MINIO_ROOT_PASSWORD=minioadmin" \
+  -d docker.io/minio/minio server /data --console-address ":9001"
 ```
 
 Now, navigate to `http://localhost:9001`, log in with the user name and password (both `minioadmin`) and add
 the `cdm-lake` bucket and upload a small file to `cdm-lake:tenant-general-warehouse/kbase/datasets/ncbi/`
+
+See the [main README](../../README.md#testing-with-containerized-minio) for more details on MinIO setup.
 
 ### Run the script
 
 The `test_list.txt` file contains 8 record set IDs and can be used to test the transfer script.
 
 ```bash
-./setup_venv.sh
-source venv/bin/activate
-python3 -m unittest minio_client_test.py -v
-python3 download_genomes.py test_list.txt
+# From the repository root, install the package
+pip install -e .
+
+# Run the MinIO client tests
+python -m pytest tests/test_minio_client.py -v
+
+# Run the download script
+cd scripts/ncbi
+python download_genomes.py test_list.txt
 ```
 
 ## Example usage

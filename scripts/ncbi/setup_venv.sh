@@ -4,6 +4,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 VENV_DIR="${SCRIPT_DIR}/venv"
 
 echo "Creating Python virtual environment..."
@@ -14,7 +15,14 @@ source "${VENV_DIR}/bin/activate"
 
 echo "Installing dependencies..."
 pip install --upgrade pip
-pip install -r "${SCRIPT_DIR}/requirements.txt"
+
+echo "Installing kbase_transfers package from repository root..."
+pip install -e "${REPO_ROOT}"
+
+if [ -f "${SCRIPT_DIR}/requirements.txt" ]; then
+    echo "Installing additional script-specific dependencies..."
+    pip install -r "${SCRIPT_DIR}/requirements.txt"
+fi
 
 echo ""
 echo "✓ Virtual environment setup complete!"
@@ -24,11 +32,9 @@ echo "  source ${VENV_DIR}/bin/activate"
 echo ""
 echo "Available scripts:"
 echo "  - download_genomes.py: Download genome files from NCBI"
-echo "  - minio_client.py: MinIO client for object storage"
-echo "  - minio_client_test.py: Tests for MinIO client"
 echo ""
-echo "To run tests:"
-echo "  python -m unittest minio_client_test.py"
+echo "To run tests (from repository root):"
+echo "  python -m pytest tests/test_minio_client.py"
 echo ""
 echo "To deactivate when done:"
 echo "  deactivate"
