@@ -59,11 +59,21 @@ least one file or subfolder.
 
 ## Install Dependencies and Run Tests
 
+### Install uv
+
+This project uses [uv](https://docs.astral.sh/uv/) for fast Python package management:
+
+```bash
+# Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
 ### Install the kbase_transfers package
 
 From the repository root:
 ```bash
-pip install -e .
+# Install all dependencies (creates .venv automatically)
+uv sync
 ```
 
 This installs the shared `kbase_transfers` package in editable mode, making the MinIO client available to all scripts.
@@ -91,15 +101,14 @@ See the [main README](../../README.md#testing-with-containerized-minio) for more
 The `test_list.txt` file contains 8 record set IDs and can be used to test the transfer script.
 
 ```bash
-# From the repository root, install the package
-pip install -e .
+# From the repository root, install dependencies
+uv sync
 
 # Run the MinIO client tests
-python -m pytest tests/test_minio_client.py -v
+uv run pytest tests/test_minio_client.py -v
 
 # Run the download script
-cd scripts/ncbi
-python download_genomes.py test_list.txt
+uv run python scripts/ncbi/download_genomes.py test_list.txt
 ```
 
 ## Example usage

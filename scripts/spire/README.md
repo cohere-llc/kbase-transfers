@@ -4,11 +4,21 @@ Scripts for transferring data from SPIRE to the KBase Lakehouse MinIO instance.
 
 ## Setup
 
+### Install uv
+
+This project uses [uv](https://docs.astral.sh/uv/) for fast Python package management:
+
+```bash
+# Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
 ### Install the kbase_transfers package
 
 From the repository root:
 ```bash
-pip install -e .
+# Install all dependencies (creates .venv automatically)
+uv sync
 ```
 
 This installs the shared `kbase_transfers` package in editable mode, making the MinIO client available to all scripts.
@@ -57,5 +67,5 @@ client.download_file(
 Run the shared MinIO client tests from the repository root:
 
 ```bash
-python -m pytest tests/test_minio_client.py -v
+uv run pytest tests/test_minio_client.py -v
 ```

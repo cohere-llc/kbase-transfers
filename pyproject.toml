@@ -24,3 +24,8 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["kbase_transfers*"]
 exclude = ["scripts*", "tests*"]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.0",
+]

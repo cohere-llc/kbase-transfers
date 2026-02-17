@@ -20,15 +20,34 @@ kbase-transfers/
 
 ## Setup
 
-### Install the Package
+### Install uv
 
-Install the `kbase_transfers` package in editable mode to make it available to all scripts:
+This project uses [uv](https://docs.astral.sh/uv/) for fast Python package management:
 
 ```bash
-pip install -e .
+# Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-This allows any script to import the shared MinIO client:
+### Install the Package
+
+Install dependencies and the `kbase_transfers` package:
+
+```bash
+# Install all dependencies in a virtual environment
+uv sync
+```
+
+
+### Running Scripts
+
+You can run scripts directly with `uv run`:
+
+```bash
+uv run python scripts/ncbi/download_genomes.py test_list.txt
+```
+
+Scripts can import the shared MinIO client:
 
 ```python
 from kbase_transfers import MinioClient
@@ -77,15 +96,14 @@ podman run -p 9000:9000 -p 9001:9001 \
 ### 3. Run Tests
 
 ```bash
-# Install the package in editable mode
-pip install -e .
+# Install dependencies
+uv sync
 
-# Run tests (if available)
-python -m pytest tests/
+# Run tests
+uv run pytest tests/
 
 # Or run a specific script
-cd scripts/ncbi
-python download_genomes.py test_list.txt
+uv run python scripts/ncbi/download_genomes.py test_list.txt
 ```
 
 ## Scripts
