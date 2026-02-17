@@ -1,0 +1,2 @@
+# Python dependencies for ncbi-download tools
+boto3>=1.26.0
