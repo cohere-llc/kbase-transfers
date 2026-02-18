@@ -164,14 +164,24 @@ class TestNcbiIntegration(unittest.TestCase):
     
     def _validate_datapackage_json(self, objects, accession_full):
         """Helper method to validate datapackage.json has one entry per file."""
-        # Find the datapackage.json file
-        datapackage_key = None
-        for obj in objects:
-            if obj.endswith('datapackage.json'):
-                datapackage_key = obj
+        # Extract assembly_dir from one of the object paths
+        # Objects look like: .../raw_data/GCA/000/195/005/GCA_000195005.1_ASM19500v1/filename
+        sample_obj = objects[0]
+        parts = sample_obj.split('/')
+        # Find the assembly directory (the one that starts with GCA_ or GCF_)
+        assembly_dir = None
+        for part in parts:
+            if part.startswith('GCA_') or part.startswith('GCF_'):
+                assembly_dir = part
                 break
         
-        self.assertIsNotNone(datapackage_key, "datapackage.json not found")
+        self.assertIsNotNone(assembly_dir, "Could not extract assembly_dir from object path")
+        
+        # Build the metadata file path
+        # The metadata file is stored in metadata/{assembly_dir}_datapackage.json
+        metadata_path = minio_path_prefix + "metadata/"
+        metadata_filename = f"{assembly_dir}_datapackage.json"
+        datapackage_key = metadata_path + metadata_filename
         
         # Download and parse the datapackage.json
         with tempfile.NamedTemporaryFile(mode='w+', suffix='.json', delete=False) as tmp:

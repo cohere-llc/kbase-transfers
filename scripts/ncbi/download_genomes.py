@@ -353,6 +353,10 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
         s3_path = minio_path_prefix + build_accession_path(assembly_dir)
         logger.info(f"  S3 path: {s3_path}")
         
+        # Path for metadata (stored separately from raw data)
+        metadata_path = minio_path_prefix + "metadata/"
+        metadata_filename = f"{assembly_dir}_datapackage.json"
+        
         full_path = base_path + assembly_dir
         ftp.cwd(full_path)
         
@@ -416,7 +420,7 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
                     file_size = local_file.stat().st_size
                     resource = {
                         "name": filename,
-                        "path": filename,
+                        "path": s3_path + filename,
                         "format": filename.split('.')[-1] if '.' in filename else "unknown",
                         "bytes": file_size,
                         "hash": actual_checksum
@@ -437,7 +441,7 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
                 file_size = local_file.stat().st_size
                 resource = {
                     "name": filename,
-                    "path": filename,
+                    "path": s3_path + filename,
                     "format": filename.split('.')[-1] if '.' in filename else "unknown",
                     "bytes": file_size,
                     "hash": None
@@ -493,7 +497,7 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
                     file_size = local_file.stat().st_size
                     resource = {
                         "name": filename,
-                        "path": filename,
+                        "path": s3_path + filename,
                         "format": filename.split('.')[-1] if '.' in filename else "unknown",
                         "bytes": file_size,
                         "hash": actual_checksum
@@ -519,7 +523,7 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
                     file_size = local_file.stat().st_size
                     resource = {
                         "name": filename,
-                        "path": filename,
+                        "path": s3_path + filename,
                         "format": filename.split('.')[-1] if '.' in filename else "unknown",
                         "bytes": file_size,
                         "hash": None
@@ -547,10 +551,10 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
             # Upload to MinIO
             s3_client.upload_file(
                 minio_bucket,
-                s3_path + 'datapackage.json',
+                metadata_path + metadata_filename,
                 str(descriptor_file)
             )
-            logger.info(f"  ✓ Uploaded datapackage.json to MinIO: {s3_path}datapackage.json")
+            logger.info(f"  ✓ Uploaded {metadata_filename} to MinIO: {metadata_path}{metadata_filename}")
     
     except Exception as e:
         logger.error(f"  ✗ ERROR: {e}")
