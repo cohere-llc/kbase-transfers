@@ -552,6 +552,7 @@ Examples:
     parser.add_argument('--prefix', help='FTP prefix to download all genomes from (e.g., GCF, GCF/000/001)')
     parser.add_argument('--output-list', help='Output file to save list of assemblies found (use with --prefix)')
     parser.add_argument('--ftp-host', default='ftp.ncbi.nlm.nih.gov', help='FTP host (default: ftp.ncbi.nlm.nih.gov)')
+    parser.add_argument('--limit', type=int, metavar='N', help='Limit processing to first N accessions (for testing)')
     
     args = parser.parse_args()
     
@@ -584,6 +585,11 @@ Examples:
         
         logger.info(f"Mode: File-based")
         logger.info(f"Found {len(accessions)} accessions to process")
+        
+        # Apply limit if specified
+        if args.limit is not None:
+            accessions = accessions[:args.limit]
+            logger.info(f"Limiting to first {args.limit} accessions for testing")
     
     else:
         # Prefix-based mode
@@ -606,6 +612,11 @@ Examples:
         if not assembly_paths:
             logger.error(f"No assembly directories found under {ftp_path}")
             sys.exit(1)
+        
+        # Apply limit if specified
+        if args.limit is not None:
+            assembly_paths = assembly_paths[:args.limit]
+            logger.info(f"Limiting to first {args.limit} assemblies for testing")
         
         # Save assembly list to file if requested
         if args.output_list:

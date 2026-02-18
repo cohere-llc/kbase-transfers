@@ -130,6 +130,18 @@ The project includes both unit tests and integration tests:
   - Verifies data integrity and structure
   - Cleans up test data
 
+- **test_ncbi_integration.py** - End-to-end test for NCBI genome downloads:
+  - Uses test accessions from test assets
+  - Downloads genome files from NCBI FTP
+  - Verifies upload to MinIO
+  - Validates file structure and metadata
+  - Cleans up test data
+
+### Test Assets
+
+Test data is stored in `tests/assets/`:
+- `ncbi_test_accessions.txt` - Sample NCBI accessions for testing
+
 Run tests with: `uv run pytest tests/ -v`
 
 ## Scripts

@@ -112,6 +112,45 @@ uv run python scripts/ncbi/download_genomes.py test_list.txt
 ```
 
 ## Example usage
+
+### Basic Usage
+
+```bash
+# Download genomes from accession list
+uv run python scripts/ncbi/download_genomes.py scripts/ncbi/list_of_accessions_x86clades.txt
+
+# Or use the test list
+uv run python scripts/ncbi/download_genomes.py scripts/ncbi/test_list.txt
+
+# Limit to first N accessions for testing
+uv run python scripts/ncbi/download_genomes.py scripts/ncbi/test_list.txt --limit 2
+```
+
+### Advanced Usage
+
+```bash
+# Download all genomes under a specific prefix
+uv run python scripts/ncbi/download_genomes.py --prefix GCF/000/001
+
+# Download from prefix and save assembly list
+uv run python scripts/ncbi/download_genomes.py --prefix GCF/000 --output-list assemblies.txt
+
+# Use with limit for testing
+uv run python scripts/ncbi/download_genomes.py --prefix GCF/000/001 --limit 5
+```
+
+### Command-Line Options
+
+- `input_file` - File with list of accessions (one per line)
+- `--prefix PREFIX` - FTP prefix to download all genomes from (e.g., `GCF`, `GCF/000/001`)
+- `--output-list FILE` - Output file to save list of assemblies found (use with `--prefix`)
+- `--ftp-host HOST` - FTP host (default: `ftp.ncbi.nlm.nih.gov`)
+- `--limit N` - Limit processing to first N accessions (for testing)
+
+**Note:** Either provide an `input_file` or use `--prefix`, but not both.
+
+## Output Structure
+
 ```
 python3 download_genomes.py example_list.txt
 ```
