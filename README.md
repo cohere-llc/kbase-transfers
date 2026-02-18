@@ -86,28 +86,21 @@ podman run -p 9000:9000 -p 9001:9001 \
   -d docker.io/minio/minio server /data --console-address ":9001"
 ```
 
-### 2. Configure MinIO
+### 2. Run Tests
 
-1. Navigate to http://localhost:9001
-2. Log in with username `minioadmin` and password `minioadmin`
-3. Create a bucket named `cdm-lake` (or as required by your script)
-4. Upload a test file or create the necessary folder structure for your script
-
-### 3. Run Tests
+**Note:** The tests automatically create the required MinIO buckets and folder structure, so no manual configuration is needed.
 
 ```bash
 # Install dependencies
 uv sync
 
-# Run tests
-uv run pytest tests/
+# Run all tests
+uv run pytest tests/ -v
 
 # Or run specific test files
 uv run pytest tests/test_minio_client.py -v
 uv run pytest tests/test_nayfach_integration.py -v
-
-# Or run a specific script
-uv run python scripts/ncbi/download_genomes.py test_list.txt
+uv run pytest tests/test_ncbi_integration.py -v
 ```
 
 ## Test Suite
