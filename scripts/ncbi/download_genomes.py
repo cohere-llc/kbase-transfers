@@ -411,13 +411,38 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
                 )
                 actual_checksum = compute_md5(local_file)
                 if actual_checksum == expected_checksum:
-                    logger.info(f"    ✓ Checksum verified, skipping: {actual_checksum}")
+                    logger.info(f"    ✓ Checksum verified, skipping download: {actual_checksum}")
+                    # Add to downloaded resources even though we didn't download
+                    file_size = local_file.stat().st_size
+                    resource = {
+                        "name": filename,
+                        "path": filename,
+                        "format": filename.split('.')[-1] if '.' in filename else "unknown",
+                        "bytes": file_size,
+                        "hash": actual_checksum
+                    }
+                    downloaded_resources.append(resource)
                     continue
                 else:
                     logger.warning(f"    ✗ Checksum mismatch in MinIO: expected {expected_checksum}, got {actual_checksum}")
                     logger.info(f"    Will re-download from NCBI")
             elif file_exists:
-                logger.info(f"  Skipping existing file in MinIO (no checksum available): {filename}")
+                logger.info(f"  File exists in MinIO (no checksum available): {filename}")
+                # Get file info from MinIO for resources
+                s3_client.download_file(
+                    minio_bucket,
+                    s3_path + filename,
+                    str(local_file)
+                )
+                file_size = local_file.stat().st_size
+                resource = {
+                    "name": filename,
+                    "path": filename,
+                    "format": filename.split('.')[-1] if '.' in filename else "unknown",
+                    "bytes": file_size,
+                    "hash": None
+                }
+                downloaded_resources.append(resource)
                 no_checksum_files.append({
                     'entry': entry,
                     'filename': filename,
