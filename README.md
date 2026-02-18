@@ -1,6 +1,6 @@
 # kbase-transfers
 
-[![Tests](https://github.com/kbase/kbase-transfers/actions/workflows/tests.yml/badge.svg)](https://github.com/kbase/kbase-transfers/actions/workflows/tests.yml)
+[![Tests](https://github.com/cohere-llc/kbase-transfers/actions/workflows/tests.yml/badge.svg)](https://github.com/cohere-llc/kbase-transfers/actions/workflows/tests.yml)
 
 Data transfer scripts for KBase Lakehouse. This repository contains scripts that transfer data from various sources (NCBI, SPIRE, etc.) to a MinIO object store.
 
