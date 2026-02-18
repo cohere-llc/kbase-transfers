@@ -451,54 +451,54 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
                     else:
                         logger.info(f"    ✓ Checksum verified: {actual_checksum}")
                         verified_checksum = True
-                
-                # Upload to MinIO
-                s3_client.upload_file(
-                    minio_bucket,
-                    s3_path + filename,
-                    str(local_file)
-                )
-                logger.info(f"    Uploaded to MinIO: {s3_path + filename}")
-                transfer_success = True
-                
-                # Add to downloaded resources
-                file_size = local_file.stat().st_size
-                resource = {
-                    "name": filename,
-                    "path": filename,
-                    "format": filename.split('.')[-1] if '.' in filename else "unknown",
-                    "bytes": file_size,
-                    "hash": actual_checksum if verified_checksum else None
-                }
-                downloaded_resources.append(resource)
-                break
-            
-            if transfer_success and not verified_checksum:
-                # No checksum available, upload anyway
-                logger.warning(f"    WARNING: No checksum available for verification")
-                s3_client.upload_file(
-                    minio_bucket,
-                    s3_path + filename,
-                    str(local_file)
-                )
-                logger.info(f"    Uploaded to MinIO: {s3_path + filename}")
-                no_checksum_files.append({
-                    'entry': entry,
-                    'filename': filename,
-                    'status': 'newly_uploaded'
-                })
-                
-                # Add to downloaded resources (without hash)
-                file_size = local_file.stat().st_size
-                resource = {
-                    "name": filename,
-                    "path": filename,
-                    "format": filename.split('.')[-1] if '.' in filename else "unknown",
-                    "bytes": file_size,
-                    "hash": None
-                }
-                downloaded_resources.append(resource)
-                transfer_success = True
+                    
+                    # Upload to MinIO
+                    s3_client.upload_file(
+                        minio_bucket,
+                        s3_path + filename,
+                        str(local_file)
+                    )
+                    logger.info(f"    Uploaded to MinIO: {s3_path + filename}")
+                    transfer_success = True
+                    
+                    # Add to downloaded resources
+                    file_size = local_file.stat().st_size
+                    resource = {
+                        "name": filename,
+                        "path": filename,
+                        "format": filename.split('.')[-1] if '.' in filename else "unknown",
+                        "bytes": file_size,
+                        "hash": actual_checksum
+                    }
+                    downloaded_resources.append(resource)
+                    break
+                else:
+                    # No checksum available - upload without verification
+                    logger.warning(f"    WARNING: No checksum available for verification")
+                    s3_client.upload_file(
+                        minio_bucket,
+                        s3_path + filename,
+                        str(local_file)
+                    )
+                    logger.info(f"    Uploaded to MinIO: {s3_path + filename}")
+                    no_checksum_files.append({
+                        'entry': entry,
+                        'filename': filename,
+                        'status': 'newly_uploaded'
+                    })
+                    
+                    # Add to downloaded resources (without hash)
+                    file_size = local_file.stat().st_size
+                    resource = {
+                        "name": filename,
+                        "path": filename,
+                        "format": filename.split('.')[-1] if '.' in filename else "unknown",
+                        "bytes": file_size,
+                        "hash": None
+                    }
+                    downloaded_resources.append(resource)
+                    transfer_success = True
+                    break
         
         logger.info(f"  ✓ Downloaded {len(target_files)} files")
         

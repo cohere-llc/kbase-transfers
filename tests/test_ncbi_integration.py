@@ -8,6 +8,7 @@ can download genome files to MinIO and create the proper directory structure.
 import unittest
 import sys
 import logging
+import json
 from pathlib import Path
 import tempfile
 
@@ -152,11 +153,66 @@ class TestNcbiIntegration(unittest.TestCase):
                 print(f"✓ Downloaded {len(matching_objects)} files to MinIO")
                 print(f"  Files include: FNA={has_fna}, GFF={has_gff}, MD5={has_md5}")
                 
+                # Validate datapackage.json completeness
+                self._validate_datapackage_json(matching_objects, accession_full)
+                
                 # Store for cleanup
                 self._test_objects = matching_objects
                 
             except Exception as e:
                 self.fail(f"Failed to download genome: {e}")
+    
+    def _validate_datapackage_json(self, objects, accession_full):
+        """Helper method to validate datapackage.json has one entry per file."""
+        # Find the datapackage.json file
+        datapackage_key = None
+        for obj in objects:
+            if obj.endswith('datapackage.json'):
+                datapackage_key = obj
+                break
+        
+        self.assertIsNotNone(datapackage_key, "datapackage.json not found")
+        
+        # Download and parse the datapackage.json
+        with tempfile.NamedTemporaryFile(mode='w+', suffix='.json', delete=False) as tmp:
+            tmp_path = tmp.name
+        
+        try:
+            self.client.download_file(minio_bucket, datapackage_key, tmp_path)
+            
+            with open(tmp_path, 'r') as f:
+                datapackage = json.load(f)
+            
+            # Get the resources list
+            resources = datapackage.get('resources', [])
+            resource_names = [r['name'] for r in resources]
+            
+            # Count actual files (excluding datapackage.json and md5checksums.txt)
+            actual_files = [obj.split('/')[-1] for obj in objects 
+                          if not obj.endswith('datapackage.json') 
+                          and not obj.endswith('md5checksums.txt')]
+            
+            # Verify no duplicates in resources
+            unique_resource_names = set(resource_names)
+            self.assertEqual(len(resource_names), len(unique_resource_names),
+                           f"Found duplicate resources: {resource_names}")
+            
+            # Verify resources match actual files
+            self.assertEqual(len(resources), len(actual_files),
+                           f"Resource count ({len(resources)}) doesn't match file count ({len(actual_files)})")
+            
+            # Verify each file has a corresponding resource
+            for filename in actual_files:
+                self.assertIn(filename, resource_names,
+                            f"File {filename} not found in datapackage resources")
+            
+            print(f"✓ datapackage.json validation passed:")
+            print(f"  - {len(resources)} resources (no duplicates)")
+            print(f"  - {len(actual_files)} actual files")
+            print(f"  - All files have corresponding resource entries")
+            
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
     
     def test_verify_uploaded_structure(self):
         """Test that uploaded files have correct structure and metadata."""
