@@ -218,45 +218,48 @@ def create_frictionless_descriptor(assembly_dir, accession_full, downloaded_file
         downloaded_files: List of dicts with keys: name, path, format, bytes, hash
     
     Returns:
-        dict: Frictionless data package descriptor
+        dict: KBase credit metadata descriptor
     """
     descriptor = {
-        "profile": "tabular-data-package",
-        "name": assembly_dir.lower().replace('.', '-').replace('_', '-'),
-        "title": f"NCBI Genome Assembly {assembly_dir}",
-        "description": f"Genome assembly files for {accession_full} downloaded from NCBI Datasets",
-        "homepage": f"https://www.ncbi.nlm.nih.gov/datasets/genome/{accession_full}/",
-        "version": accession_full.split('_')[-1],  # e.g., "1" from GCA_000195005.1
-        "created": datetime.now().isoformat(),
-        "licenses": [
-        ],
-        "sources": [
+        "identifier": f"NCBI:{accession_full}",
+        "resource_type": "dataset",
+        "version": accession_full.split('_')[-1],
+        "titles": [
             {
-                "title": "NCBI Genomes FTP",
-                "path": "ftp.ncbi.nlm.nih.gov/genomes/all/"
+                "title": f"NCBI Genome Assembly {assembly_dir}"
             }
         ],
+        "descriptions": [
+            {
+                "description_text": f"Genome assembly files for {accession_full} downloaded from NCBI Datasets"
+            }
+        ],
+        "url": f"https://www.ncbi.nlm.nih.gov/datasets/genome/{accession_full}/",
         "contributors": [
             {
-                "title": "NCBI Datasets Team",
-                "role": "author",
-                "organization": "National Center for Biotechnology Information"
+                "contributor_type": "Organization",
+                "name": "National Center for Biotechnology Information",
+                "contributor_id": "ROR:02meqm098",
+                "contributor_roles": "DataCurator"
             }
         ],
-        "citations": [
-            {
-                "title": "Exploring and retrieving sequence and metadata for species across the tree of life with NCBI Datasets",
-                "authors": "O'Leary NA, Cox E, Holmes JB, Anderson WR, Falk R, Hem V, Tsuchiya MTN, Schuler GD, Zhang X, Torcivia J, Ketter A, Breen L, Cothran J, Bajwa H, Tinne J, Meric PA, Hlavina W, Schneider VA",
-                "journal": "Sci Data",
-                "year": "2024",
-                "volume": "11",
-                "issue": "1",
-                "pages": "732",
-                "doi": "10.1038/s41597-024-03571-y",
-                "pmid": "38969627",
-                "pmcid": "PMC11226681"
-            }
-        ],
+        "publisher": {
+            "organization_name": "National Center for Biotechnology Information",
+            "organization_id": "ROR:02meqm098"
+        },
+        "license": { },
+        "meta": {
+            "credit_metadata_schema_version": "1.0",
+            "credit_metadata_source": [
+                {
+                    "source_name": "NCBI Genomes FTP",
+                    "source_url": "ftp.ncbi.nlm.nih.gov/genomes/all/",
+                    "access_timestamp": int(datetime.now().timestamp())
+                }
+            ],
+            "saved_by": "kbase-transfers-ncbi-downloader",
+            "timestamp": int(datetime.now().timestamp())
+        },
         "resources": downloaded_files
     }
     
