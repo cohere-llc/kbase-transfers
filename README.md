@@ -102,13 +102,40 @@ uv sync
 # Run tests
 uv run pytest tests/
 
+# Or run specific test files
+uv run pytest tests/test_minio_client.py -v
+uv run pytest tests/test_nayfach_integration.py -v
+
 # Or run a specific script
 uv run python scripts/ncbi/download_genomes.py test_list.txt
 ```
+
+## Test Suite
+
+The project includes both unit tests and integration tests:
+
+### Unit Tests
+
+- **test_minio_client.py** - Tests for MinIO client functions:
+  - File upload/download
+  - JSON object upload
+  - Bucket and prefix existence checks
+  - Object listing
+
+### Integration Tests
+
+- **test_nayfach_integration.py** - End-to-end test for the Nayfach 2020 dataset:
+  - Downloads the Excel file if needed
+  - Loads sample records to MinIO
+  - Verifies data integrity and structure
+  - Cleans up test data
+
+Run tests with: `uv run pytest tests/ -v`
 
 ## Scripts
 
 See individual script directories for specific documentation:
 
 - [scripts/ncbi/](scripts/ncbi/README.md) - NCBI genome downloads
+- [scripts/nayfach_2020/](scripts/nayfach_2020/README.md) - Nayfach et al. 2020 metagenome and MAG dataset
 - [scripts/spire/](scripts/spire/README.md) - SPIRE data transfers

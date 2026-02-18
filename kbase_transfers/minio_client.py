@@ -1,6 +1,8 @@
 # MinIO client for loading files into the KBase Lakehouse Object Store
 import boto3
 import os
+import json
+from botocore.exceptions import ClientError
 
 endpoint_url = "http://localhost:9000"
 access_key = "minioadmin"
@@ -37,4 +39,33 @@ class MinioClient:
         response = self.s3.list_buckets()
         return [bucket['Name'] for bucket in response.get('Buckets', [])]
     
+    def put_json_object(self, bucket_name, object_name, data):
+        """Upload a JSON object to MinIO."""
+        json_bytes = json.dumps(data, indent=2).encode('utf-8')
+        self.s3.put_object(
+            Bucket=bucket_name,
+            Key=object_name,
+            Body=json_bytes,
+            ContentType='application/json'
+        )
+    
+    def prefix_exists(self, bucket_name, prefix):
+        """Check if a prefix (folder path) exists in the bucket."""
+        try:
+            response = self.s3.list_objects_v2(
+                Bucket=bucket_name,
+                Prefix=prefix,
+                MaxKeys=1
+            )
+            return 'Contents' in response
+        except ClientError:
+            return False
+    
+    def bucket_exists(self, bucket_name):
+        """Check if a bucket exists."""
+        try:
+            self.s3.head_bucket(Bucket=bucket_name)
+            return True
+        except ClientError:
+            return False
     
