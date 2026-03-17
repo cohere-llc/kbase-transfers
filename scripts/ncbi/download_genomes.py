@@ -16,6 +16,8 @@ import logging
 import argparse
 from datetime import datetime
 
+from frictionless import Package
+
 from kbase_transfers import MinioClient
 
 minio_bucket = "cdm-lake"
@@ -262,7 +264,26 @@ def create_frictionless_descriptor(assembly_dir, accession_full, downloaded_file
         },
         "resources": downloaded_files
     }
-    
+
+    # Normalise resources: frictionless requires name to be lowercase and
+    # does not accept null values for hash.
+    for resource in descriptor["resources"]:
+        resource["name"] = resource["name"].lower()
+        if resource.get("hash") is None:
+            resource.pop("hash", None)
+
+    # Validate descriptor structure with frictionless (does not load data sources)
+    logger.debug(f"Validating frictionless data package descriptor for {accession_full}")
+    package = Package(descriptor)
+    errors = list(package.metadata_validate(descriptor))
+    if errors:
+        messages = [str(e) for e in errors]
+        error_details = "\n  - ".join(messages)
+        raise ValueError(
+            f"Frictionless validation failed for {accession_full} "
+            f"({len(messages)} errors):\n  - {error_details}"
+        )
+
     return descriptor
 
 

@@ -300,6 +300,7 @@ source = { editable = "." }
 dependencies = [
     { name = "boto3" },
     { name = "dtspy" },
+    { name = "frictionless" },
     { name = "openpyxl" },
     { name = "pandas" },
     { name = "requests" },
@@ -319,6 +320,7 @@ dev = [
 requires-dist = [
     { name = "boto3", specifier = ">=1.26.0" },
     { name = "dtspy", git = "https://github.com/kbase/dtspy.git" },
+    { name = "frictionless", specifier = ">=5.18.1" },
     { name = "openpyxl", specifier = ">=3.0.0" },
     { name = "pandas", specifier = ">=1.5.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },

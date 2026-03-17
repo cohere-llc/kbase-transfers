@@ -18,6 +18,7 @@ dependencies = [
     "openpyxl>=3.0.0",
     "requests>=2.28.0",
     "dtspy @ git+https://github.com/kbase/dtspy.git",
+    "frictionless>=5.18.1",
 ]
 
 [project.optional-dependencies]

@@ -213,7 +213,7 @@ class TestNcbiIntegration(unittest.TestCase):
             
             # Verify each file has a corresponding resource
             for filename in actual_files:
-                self.assertIn(filename, resource_names,
+                self.assertIn(filename.lower(), resource_names,
                             f"File {filename} not found in datapackage resources")
             
             print(f"✓ datapackage.json validation passed:")
