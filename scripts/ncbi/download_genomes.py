@@ -287,47 +287,93 @@ def create_frictionless_descriptor(assembly_dir, accession_full, downloaded_file
     return descriptor
 
 
-def find_assembly_directories_in_prefix(ftp, prefix_path):
+def find_assembly_directories_in_prefix(ftp, prefix_path, start_from=None, limit=None):
     """
     Recursively find all assembly directories under a given prefix.
     Returns list of full paths to assembly directories.
     e.g., /genomes/all/GCF/000/001/215/GCF_000001215.2_Release_5/
+
+    Args:
+        ftp: Connected FTP instance.
+        prefix_path: Base FTP path to search under.
+        start_from: If set, skip top-level subdirectories whose names sort
+                    before this value (alphanumeric comparison). Only applied
+                    at the first level of subdirectories under prefix_path.
+        limit: If set, stop collecting once this many assembly dirs are found.
     """
     assembly_pattern = re.compile(r'^GC[AF]_\d{9}\.\d+_.*')
     assembly_dirs = []
-    
-    def traverse_directory(path):
+
+    def traverse_directory(path, skip_before=None):
+        if limit and len(assembly_dirs) >= limit:
+            return
         logger.debug(f"Traversing: {path}")
         try:
             ftp.cwd(path)
             items = []
             ftp.retrlines('LIST', lambda x: items.append(x))
-            
+
             for line in items:
+                if limit and len(assembly_dirs) >= limit:
+                    break
+
                 parts = line.split()
                 if len(parts) < 9:
                     continue
-                    
+
                 name = parts[-1]
                 is_dir = line.startswith('d')
-                
+
                 if not is_dir:
                     continue
-                
+
+                # At the top level, skip subdirectories that sort before start_from
+                if skip_before is not None and name < skip_before:
+                    logger.debug(f"  Skipping {name} (before start_from={skip_before})")
+                    continue
+
                 # Check if this is an assembly directory
                 if assembly_pattern.match(name):
                     full_path = f"{path}{name}/"
                     assembly_dirs.append(full_path)
                     logger.debug(f"  Found assembly: {full_path}")
                 else:
-                    # Recurse into subdirectory
+                    # Recurse into subdirectory (no skip_before for deeper levels)
                     traverse_directory(f"{path}{name}/")
-        
+
         except Exception as e:
             logger.warning(f"Error traversing {path}: {e}")
-    
-    traverse_directory(prefix_path)
+
+    traverse_directory(prefix_path, skip_before=start_from)
     return assembly_dirs
+
+
+def list_ftp_subdirectories(ftp, path, start_from=None):
+    """
+    List direct subdirectories of an FTP path, optionally filtering to those
+    that sort >= start_from.
+
+    Returns a sorted list of subdirectory names (not full paths).
+    """
+    try:
+        ftp.cwd(path)
+        items = []
+        ftp.retrlines('LIST', lambda x: items.append(x))
+        subdirs = []
+        for line in items:
+            parts = line.split()
+            if len(parts) < 9:
+                continue
+            if not line.startswith('d'):
+                continue
+            name = parts[-1]
+            if start_from is not None and name < start_from:
+                continue
+            subdirs.append(name)
+        return sorted(subdirs)
+    except Exception as e:
+        logger.error(f"Error listing subdirectories of {path}: {e}")
+        return []
 
 
 def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_checksum_files, ftp_host='ftp.ncbi.nlm.nih.gov', assembly_path=None):
@@ -598,11 +644,18 @@ Examples:
   python download_genomes.py --prefix GCF
   python download_genomes.py --prefix GCF/000/001
   python download_genomes.py --prefix GCA/000
+
+  # Resume from a specific subdirectory
+  python download_genomes.py --prefix GCF --start-from 003
+  python download_genomes.py --prefix GCA --start-from 001
         """
     )
     
     parser.add_argument('input_file', nargs='?', help='File with list of accessions')
     parser.add_argument('--prefix', help='FTP prefix to download all genomes from (e.g., GCF, GCF/000/001)')
+    parser.add_argument('--start-from', metavar='SUBDIR',
+                        help='Skip top-level subdirectories under --prefix that sort before SUBDIR '
+                             '(e.g., --prefix GCF --start-from 003 processes GCF/003/, GCF/004/, ...)')
     parser.add_argument('--output-list', help='Output file to save list of assemblies found (use with --prefix)')
     parser.add_argument('--ftp-host', default='ftp.ncbi.nlm.nih.gov', help='FTP host (default: ftp.ncbi.nlm.nih.gov)')
     parser.add_argument('--limit', type=int, metavar='N', help='Limit processing to first N accessions (for testing)')
@@ -618,126 +671,177 @@ Examples:
     
     if args.output_list and not args.prefix:
         parser.error('--output-list can only be used with --prefix')
-    
+
+    if args.start_from and not args.prefix:
+        parser.error('--start-from can only be used with --prefix')
+
     # Set up logging
     log_file = setup_logging(module_name=__name__)
     logger.info(f"Logging to: {log_file}")
-    
-    # Determine mode and get list of items to process
-    accessions = []
-    assembly_paths = []
-    
-    if args.input_file:
-        # File-based mode
-        if not os.path.exists(args.input_file):
-            print(f"Error: File not found: {args.input_file}")
-            sys.exit(1)
-        
-        with open(args.input_file, 'r') as f:
-            accessions = [line.strip() for line in f if line.strip()]
-        
-        logger.info(f"Mode: File-based")
-        logger.info(f"Found {len(accessions)} accessions to process")
-        
-        # Apply limit if specified
-        if args.limit is not None:
-            accessions = accessions[:args.limit]
-            logger.info(f"Limiting to first {args.limit} accessions for testing")
-    
-    else:
-        # Prefix-based mode
-        prefix = args.prefix.strip('/')
-        ftp_path = f"/genomes/all/{prefix}/"
-        
-        logger.info(f"Mode: Prefix-based")
-        logger.info(f"Searching for assemblies under: {ftp_path}")
-        
-        # Connect to FTP and find all assembly directories
-        ftp = FTP(args.ftp_host)
-        ftp.login()
-        
-        try:
-            assembly_paths = find_assembly_directories_in_prefix(ftp, ftp_path)
-            logger.info(f"Found {len(assembly_paths)} assembly directories")
-        finally:
-            ftp.quit()
-        
-        if not assembly_paths:
-            logger.error(f"No assembly directories found under {ftp_path}")
-            sys.exit(1)
-        
-        # Apply limit if specified
-        if args.limit is not None:
-            assembly_paths = assembly_paths[:args.limit]
-            logger.info(f"Limiting to first {args.limit} assemblies for testing")
-        
-        # Save assembly list to file if requested
-        if args.output_list:
-            logger.info(f"Saving assembly list to: {args.output_list}")
-            with open(args.output_list, 'w') as f:
-                for path in assembly_paths:
-                    # Extract accession from path
-                    # e.g., /genomes/all/GCF/000/001/215/GCF_000001215.2_Release_5/ -> GCF_000001215.2
-                    match = re.search(r'/(GC[AF]_\d{9}\.\d+)_[^/]+/', path)
-                    if match:
-                        accession = match.group(1)
-                        f.write(accession + '\n')
-            logger.info(f"Saved {len(assembly_paths)} accessions to {args.output_list}")
 
-    # Initialize MinIO client and check bucket/path
+    # Initialize MinIO client and temp dir (needed for all modes)
     s3 = get_minio_client()
-
-    # Create a temporary folder for downloads
     temp_dir = tempfile.TemporaryDirectory()
-    
-    # Process each accession or assembly path
+
+    # Shared counters
     success_count = 0
     failed = []
     failed_transfers = []  # Track individual file transfer failures
     no_checksum_files = []  # Track files without checksums
-    
-    items_to_process = accessions if accessions else assembly_paths
-    
-    for i, entry in enumerate(items_to_process, 1):
-        try:
-            logger.info(f"\n[{i}/{len(items_to_process)}] {entry}")
-            
-            if assembly_paths:
-                # Prefix mode: entry is an assembly path
-                download_genome_files(entry, s3, temp_dir.name, failed_transfers, no_checksum_files, 
-                                     ftp_host=args.ftp_host, assembly_path=entry)
-            else:
-                # File mode: entry is an accession from the file
-                download_genome_files(entry, s3, temp_dir.name, failed_transfers, no_checksum_files,
+
+    if args.input_file:
+        # ── File-based mode ────────────────────────────────────────────────
+        if not os.path.exists(args.input_file):
+            print(f"Error: File not found: {args.input_file}")
+            sys.exit(1)
+
+        with open(args.input_file, 'r') as f:
+            accessions = [line.strip() for line in f if line.strip()]
+
+        logger.info(f"Mode: File-based")
+        logger.info(f"Found {len(accessions)} accessions to process")
+
+        if args.limit is not None:
+            accessions = accessions[:args.limit]
+            logger.info(f"Limiting to first {args.limit} accessions")
+
+        for i, accession in enumerate(accessions, 1):
+            try:
+                logger.info(f"\n[{i}/{len(accessions)}] {accession}")
+                download_genome_files(accession, s3, temp_dir.name, failed_transfers, no_checksum_files,
                                      ftp_host=args.ftp_host)
-            
-            success_count += 1
-            time.sleep(0.5)  # Be nice to NCBI servers
-        
-        except Exception as e:
-            logger.error(f"  ✗ FAILED: {entry}")
-            failed.append((entry, str(e)))
-    
-    # Summary
+                success_count += 1
+                time.sleep(0.5)  # Be nice to NCBI servers
+            except Exception as e:
+                logger.error(f"  ✗ FAILED: {accession}")
+                failed.append((accession, str(e)))
+
+    else:
+        # ── Prefix-based mode ──────────────────────────────────────────────
+        prefix = args.prefix.strip('/')
+        ftp_path = f"/genomes/all/{prefix}/"
+
+        logger.info(f"Mode: Prefix-based")
+        logger.info(f"Searching for assemblies under: {ftp_path}")
+        if args.start_from:
+            logger.info(f"Starting from subdirectory: {args.start_from}")
+
+        output_list_fh = open(args.output_list, 'w') if args.output_list else None
+
+        def _write_output_list(paths):
+            """Append accessions extracted from assembly paths to the output list file."""
+            if output_list_fh:
+                for path in paths:
+                    m = re.search(r'/(GC[AF]_\d{9}\.\d+)_[^/]+/', path)
+                    if m:
+                        output_list_fh.write(m.group(1) + '\n')
+                output_list_fh.flush()
+
+        def _process_paths(paths):
+            """Download each assembly path; returns True if the limit was reached."""
+            nonlocal success_count
+            for entry in paths:
+                total_seen = success_count + len(failed) + 1
+                try:
+                    logger.info(f"\n[{total_seen}] {entry}")
+                    download_genome_files(entry, s3, temp_dir.name, failed_transfers, no_checksum_files,
+                                         ftp_host=args.ftp_host, assembly_path=entry)
+                    success_count += 1
+                    time.sleep(0.5)  # Be nice to NCBI servers
+                except Exception as e:
+                    logger.error(f"  ✗ FAILED: {entry}")
+                    failed.append((entry, str(e)))
+
+                if args.limit and (success_count + len(failed)) >= args.limit:
+                    return True  # limit reached
+            return False
+
+        try:
+            if args.start_from:
+                # Iterative mode: list top-level subdirs, then discover + process
+                # one subdir at a time to avoid building a huge list upfront.
+                ftp = FTP(args.ftp_host)
+                ftp.login()
+                try:
+                    top_subdirs = list_ftp_subdirectories(ftp, ftp_path, start_from=args.start_from)
+                finally:
+                    ftp.quit()
+
+                logger.info(f"Found {len(top_subdirs)} top-level subdirectories >= '{args.start_from}'")
+
+                for subdir in top_subdirs:
+                    subdir_path = f"{ftp_path}{subdir}/"
+                    remaining = (args.limit - success_count - len(failed)) if args.limit else None
+
+                    logger.info(f"Scanning subdir: {subdir_path}")
+                    ftp = FTP(args.ftp_host)
+                    ftp.login()
+                    try:
+                        subdir_paths = find_assembly_directories_in_prefix(
+                            ftp, subdir_path, limit=remaining
+                        )
+                    finally:
+                        ftp.quit()
+
+                    if not subdir_paths:
+                        logger.debug(f"No assemblies found under {subdir_path}")
+                        continue
+
+                    logger.info(f"  Found {len(subdir_paths)} assemblies in {subdir}")
+                    _write_output_list(subdir_paths)
+
+                    limit_reached = _process_paths(subdir_paths)
+                    if limit_reached:
+                        break
+
+            else:
+                # Non-iterative mode: build the full list first, then process.
+                ftp = FTP(args.ftp_host)
+                ftp.login()
+                try:
+                    assembly_paths = find_assembly_directories_in_prefix(
+                        ftp, ftp_path, limit=args.limit
+                    )
+                finally:
+                    ftp.quit()
+
+                logger.info(f"Found {len(assembly_paths)} assembly directories")
+
+                if not assembly_paths:
+                    logger.error(f"No assembly directories found under {ftp_path}")
+                    sys.exit(1)
+
+                _write_output_list(assembly_paths)
+                if args.output_list:
+                    logger.info(f"Saved {len(assembly_paths)} accessions to {args.output_list}")
+
+                _process_paths(assembly_paths)
+
+        finally:
+            if output_list_fh:
+                output_list_fh.close()
+
+    # ── Summary ────────────────────────────────────────────────────────────
+    total = success_count + len(failed)
     logger.info("\n" + "="*60)
     logger.info(f"SUMMARY:")
-    logger.info(f"  Total: {len(items_to_process)}")
+    logger.info(f"  Total attempted: {total}")
     logger.info(f"  Success: {success_count}")
     logger.info(f"  Failed: {len(failed)}")
     logger.info(f"  Failed file transfers: {len(failed_transfers)}")
     logger.info(f"  Files without checksums: {len(no_checksum_files)}")
-    
+
     if failed:
         logger.error("\nFailed accessions:")
         for entry, error in failed:
             logger.error(f"  - {entry}: {error}")
-    
+
     if failed_transfers:
         logger.warning("\nFailed file transfers (checksum verification):")
         for transfer in failed_transfers:
             logger.warning(f"  - {transfer['entry']} / {transfer['filename']}")
             logger.warning(f"    Reason: {transfer['reason']}")
-    
+
     if no_checksum_files:
         logger.warning("\nFiles without checksums:")
         for file_info in no_checksum_files:
