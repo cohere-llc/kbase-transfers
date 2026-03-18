@@ -692,11 +692,12 @@ def run(
     no_checksum_files = []  # Track files without checksums
 
     def _download_one(entry, is_assembly_path=False):
-        """Download a single assembly in its own temp subdir. Returns (entry, error|None)."""
+        """Download a single assembly in its own temp subdir and MinIO client. Returns (entry, error|None)."""
         assembly_tmp = tempfile.mkdtemp(dir=temp_dir.name)
+        thread_s3 = get_minio_client()  # Each thread gets its own connection pool
         try:
             download_genome_files(
-                entry, s3, assembly_tmp, failed_transfers, no_checksum_files,
+                entry, thread_s3, assembly_tmp, failed_transfers, no_checksum_files,
                 ftp_host=ftp_host,
                 assembly_path=entry if is_assembly_path else None,
             )
