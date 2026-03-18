@@ -25,11 +25,31 @@ class MinioClient:
             aws_secret_access_key=secret_key
         )
 
-    def upload_file(self, bucket_name, object_name, file_path):
-        self.s3.upload_file(file_path, bucket_name, object_name)
+    def upload_file(self, bucket_name, object_name, file_path, metadata=None):
+        extra_args = {}
+        if metadata:
+            extra_args['Metadata'] = metadata
+        self.s3.upload_file(file_path, bucket_name, object_name,
+                            ExtraArgs=extra_args if extra_args else None)
 
     def download_file(self, bucket_name, object_name, file_path):
         self.s3.download_file(bucket_name, object_name, file_path)
+
+    def stat_object(self, bucket_name, object_name):
+        """Return {'size': int, 'md5': str|None} via a single HEAD request.
+
+        'md5' comes from the user-metadata key 'md5', stored when files are
+        uploaded with upload_file(metadata={'md5': <hex>}).
+        Returns None if the object does not exist or the request fails.
+        """
+        try:
+            response = self.s3.head_object(Bucket=bucket_name, Key=object_name)
+            return {
+                'size': response.get('ContentLength'),
+                'md5': response.get('Metadata', {}).get('md5'),
+            }
+        except Exception:
+            return None
 
     def list_objects(self, bucket_name, prefix=''):
         response = self.s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix)

@@ -17,6 +17,7 @@ import tempfile
 import hashlib
 import logging
 import argparse
+import socket
 from datetime import datetime
 
 from frictionless import Package
@@ -70,6 +71,26 @@ def setup_logging(log_file=None, module_name=None):
     target_logger.addHandler(console_handler)
     
     return log_file
+
+
+def _set_ftp_keepalive(ftp, idle=30, interval=10, count=3):
+    """
+    Enable TCP keepalive on the FTP control connection socket.
+
+    Prevents NCBI's '421 No transfer timeout' when the control connection sits
+    idle while large files are transferred on the data channel, or while MinIO
+    checksum verification is running.  The OS sends keepalive probes after
+    ``idle`` seconds of inactivity, repeating every ``interval`` seconds up to
+    ``count`` times before declaring the connection dead.
+    """
+    sock = ftp.sock
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    if hasattr(socket, 'TCP_KEEPIDLE'):
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, idle)
+    if hasattr(socket, 'TCP_KEEPINTVL'):
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, interval)
+    if hasattr(socket, 'TCP_KEEPCNT'):
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, count)
 
 
 def get_minio_client():
@@ -408,6 +429,7 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
     # Connect to FTP
     ftp = FTP(ftp_host)
     ftp.login()
+    _set_ftp_keepalive(ftp)  # Prevent '421 No transfer timeout' on long transfers
     
     try:
         # Build path and find assembly directory (if not already provided)
@@ -477,7 +499,20 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
             # If file exists in MinIO and we have a checksum, verify it first
             if file_exists and expected_checksum:
                 logger.info(f"  File exists in MinIO, verifying: {filename}")
-                # Download from MinIO to verify
+                # Fast path: check stored metadata checksum (HEAD request, no download)
+                obj_info = s3_client.stat_object(minio_bucket, s3_path + filename)
+                if obj_info and obj_info.get('md5') == expected_checksum:
+                    logger.info(f"    ✓ Checksum verified via metadata, skipping download: {expected_checksum}")
+                    resource = {
+                        "name": filename,
+                        "path": s3_path + filename,
+                        "format": filename.split('.')[-1] if '.' in filename else "unknown",
+                        "bytes": obj_info.get('size'),
+                        "hash": expected_checksum
+                    }
+                    downloaded_resources.append(resource)
+                    continue
+                # Slow path: download and compute MD5 locally
                 s3_client.download_file(
                     minio_bucket,
                     s3_path + filename,
@@ -486,7 +521,13 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
                 actual_checksum = compute_md5(local_file)
                 if actual_checksum == expected_checksum:
                     logger.info(f"    ✓ Checksum verified, skipping download: {actual_checksum}")
-                    # Add to downloaded resources even though we didn't download
+                    # Backfill metadata so future runs use the fast path
+                    s3_client.upload_file(
+                        minio_bucket,
+                        s3_path + filename,
+                        str(local_file),
+                        metadata={'md5': actual_checksum}
+                    )
                     file_size = local_file.stat().st_size
                     resource = {
                         "name": filename,
@@ -502,13 +543,9 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
                     logger.info(f"    Will re-download from NCBI")
             elif file_exists:
                 logger.info(f"  File exists in MinIO (no checksum available): {filename}")
-                # Get file info from MinIO for resources
-                s3_client.download_file(
-                    minio_bucket,
-                    s3_path + filename,
-                    str(local_file)
-                )
-                file_size = local_file.stat().st_size
+                # Use HEAD to get size without downloading
+                obj_info = s3_client.stat_object(minio_bucket, s3_path + filename)
+                file_size = obj_info.get('size') if obj_info else None
                 resource = {
                     "name": filename,
                     "path": s3_path + filename,
@@ -554,11 +591,12 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
                         logger.info(f"    ✓ Checksum verified: {actual_checksum}")
                         verified_checksum = True
                     
-                    # Upload to MinIO
+                    # Upload to MinIO (store MD5 as metadata for fast future verification)
                     s3_client.upload_file(
                         minio_bucket,
                         s3_path + filename,
-                        str(local_file)
+                        str(local_file),
+                        metadata={'md5': actual_checksum}
                     )
                     logger.info(f"    Uploaded to MinIO: {s3_path + filename}")
                     transfer_success = True
