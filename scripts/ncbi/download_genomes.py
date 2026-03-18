@@ -634,52 +634,48 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
         ftp.quit()
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description='Download genome files from NCBI to MinIO',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Download from accession list file
-  python download_genomes.py list_of_accessions.txt
-  
-  # Download all genomes under a prefix
-  python download_genomes.py --prefix GCF
-  python download_genomes.py --prefix GCF/000/001
-  python download_genomes.py --prefix GCA/000
+def run(
+    input_file=None,
+    prefix=None,
+    start_from=None,
+    output_list=None,
+    ftp_host='ftp.ncbi.nlm.nih.gov',
+    threads=1,
+    limit=None,
+):
+    """
+    Execute the genome download workflow.
 
-  # Resume from a specific subdirectory
-  python download_genomes.py --prefix GCF --start-from 003
-  python download_genomes.py --prefix GCA --start-from 001
-        """
-    )
-    
-    parser.add_argument('input_file', nargs='?', help='File with list of accessions')
-    parser.add_argument('--prefix', help='FTP prefix to download all genomes from (e.g., GCF, GCF/000/001)')
-    parser.add_argument('--start-from', metavar='SUBDIR',
-                        help='Skip top-level subdirectories under --prefix that sort before SUBDIR '
-                             '(e.g., --prefix GCF --start-from 003 processes GCF/003/, GCF/004/, ...)')
-    parser.add_argument('--output-list', help='Output file to save list of assemblies found (use with --prefix)')
-    parser.add_argument('--ftp-host', default='ftp.ncbi.nlm.nih.gov', help='FTP host (default: ftp.ncbi.nlm.nih.gov)')
-    parser.add_argument('--threads', type=int, default=1, metavar='N',
-                        help='Number of parallel download threads (default: 1)')
-    parser.add_argument('--limit', type=int, metavar='N', help='Limit processing to first N accessions (for testing)')
-    
-    args = parser.parse_args()
-    
-    # Validate arguments
-    if not args.input_file and not args.prefix:
-        parser.error('Either provide an input file or use --prefix')
-    
-    if args.input_file and args.prefix:
-        parser.error('Cannot use both input file and --prefix at the same time')
-    
-    if args.output_list and not args.prefix:
-        parser.error('--output-list can only be used with --prefix')
+    Can be called directly from Python as well as from the CLI via main().
 
-    if args.start_from and not args.prefix:
-        parser.error('--start-from can only be used with --prefix')
+    Example usage:
 
+        # Download from an accession list file
+        run(input_file='list_of_accessions.txt')
+
+        # Download all assemblies under a prefix, limiting to 100
+        run(prefix='GCF', limit=100, threads=4)
+
+        # Resume a prefix run from a specific top-level subdirectory,
+        # saving discovered accessions to a file
+        run(prefix='GCF', start_from='003', output_list='gcf_accessions.txt', threads=8)
+
+    Args:
+        input_file:  Path to a file containing one accession per line
+                     (mutually exclusive with ``prefix``).
+        prefix:      FTP sub-path under /genomes/all/ to scan recursively,
+                     e.g. ``'GCF'`` or ``'GCF/000/001'``
+                     (mutually exclusive with ``input_file``).
+        start_from:  When using ``prefix``, skip top-level subdirectories
+                     that sort before this value, e.g. ``'003'``.  Useful for
+                     resuming an interrupted run.
+        output_list: Path to a file where discovered accession IDs will be
+                     written incrementally (only valid with ``prefix``).
+        ftp_host:    NCBI FTP hostname (default: ``'ftp.ncbi.nlm.nih.gov'``).
+        threads:     Number of parallel download threads (default: ``1``).
+        limit:       Stop after this many assemblies have been attempted
+                     (handy for smoke-testing).
+    """
     # Set up logging
     log_file = setup_logging(module_name=__name__)
     logger.info(f"Logging to: {log_file}")
@@ -701,7 +697,7 @@ Examples:
         try:
             download_genome_files(
                 entry, s3, assembly_tmp, failed_transfers, no_checksum_files,
-                ftp_host=args.ftp_host,
+                ftp_host=ftp_host,
                 assembly_path=entry if is_assembly_path else None,
             )
             return entry, None
@@ -717,7 +713,7 @@ Examples:
         """
         nonlocal success_count
         limit_reached = False
-        with ThreadPoolExecutor(max_workers=args.threads) as executor:
+        with ThreadPoolExecutor(max_workers=threads) as executor:
             futures = {executor.submit(_download_one, e, is_assembly_path): e for e in entries}
             for future in as_completed(futures):
                 entry, error = future.result()
@@ -727,40 +723,40 @@ Examples:
                         failed.append((entry, str(error)))
                     else:
                         success_count += 1
-                    if args.limit and (success_count + len(failed)) >= args.limit:
+                    if limit and (success_count + len(failed)) >= limit:
                         limit_reached = True
                 time.sleep(0.5)  # Be nice to NCBI servers
         return limit_reached
 
-    if args.input_file:
+    if input_file:
         # ── File-based mode ────────────────────────────────────────────────
-        if not os.path.exists(args.input_file):
-            print(f"Error: File not found: {args.input_file}")
+        if not os.path.exists(input_file):
+            print(f"Error: File not found: {input_file}")
             sys.exit(1)
 
-        with open(args.input_file, 'r') as f:
+        with open(input_file, 'r') as f:
             accessions = [line.strip() for line in f if line.strip()]
 
         logger.info(f"Mode: File-based")
         logger.info(f"Found {len(accessions)} accessions to process")
 
-        if args.limit is not None:
-            accessions = accessions[:args.limit]
-            logger.info(f"Limiting to first {args.limit} accessions")
+        if limit is not None:
+            accessions = accessions[:limit]
+            logger.info(f"Limiting to first {limit} accessions")
 
         _process_batch(accessions, is_assembly_path=False)
 
     else:
         # ── Prefix-based mode ──────────────────────────────────────────────
-        prefix = args.prefix.strip('/')
-        ftp_path = f"/genomes/all/{prefix}/"
+        prefix_path = prefix.strip('/')
+        ftp_path = f"/genomes/all/{prefix_path}/"
 
         logger.info(f"Mode: Prefix-based")
         logger.info(f"Searching for assemblies under: {ftp_path}")
-        if args.start_from:
-            logger.info(f"Starting from subdirectory: {args.start_from}")
+        if start_from:
+            logger.info(f"Starting from subdirectory: {start_from}")
 
-        output_list_fh = open(args.output_list, 'w') if args.output_list else None
+        output_list_fh = open(output_list, 'w') if output_list else None
 
         def _write_output_list(paths):
             """Append accessions extracted from assembly paths to the output list file."""
@@ -772,24 +768,24 @@ Examples:
                 output_list_fh.flush()
 
         try:
-            if args.start_from:
+            if start_from:
                 # Iterative mode: list top-level subdirs, then discover + process
                 # one subdir at a time to avoid building a huge list upfront.
-                ftp = FTP(args.ftp_host)
+                ftp = FTP(ftp_host)
                 ftp.login()
                 try:
-                    top_subdirs = list_ftp_subdirectories(ftp, ftp_path, start_from=args.start_from)
+                    top_subdirs = list_ftp_subdirectories(ftp, ftp_path, start_from=start_from)
                 finally:
                     ftp.quit()
 
-                logger.info(f"Found {len(top_subdirs)} top-level subdirectories >= '{args.start_from}'")
+                logger.info(f"Found {len(top_subdirs)} top-level subdirectories >= '{start_from}'")
 
                 for subdir in top_subdirs:
                     subdir_path = f"{ftp_path}{subdir}/"
-                    remaining = (args.limit - success_count - len(failed)) if args.limit else None
+                    remaining = (limit - success_count - len(failed)) if limit else None
 
                     logger.info(f"Scanning subdir: {subdir_path}")
-                    ftp = FTP(args.ftp_host)
+                    ftp = FTP(ftp_host)
                     ftp.login()
                     try:
                         subdir_paths = find_assembly_directories_in_prefix(
@@ -811,11 +807,11 @@ Examples:
 
             else:
                 # Non-iterative mode: build the full list first, then process.
-                ftp = FTP(args.ftp_host)
+                ftp = FTP(ftp_host)
                 ftp.login()
                 try:
                     assembly_paths = find_assembly_directories_in_prefix(
-                        ftp, ftp_path, limit=args.limit
+                        ftp, ftp_path, limit=limit
                     )
                 finally:
                     ftp.quit()
@@ -827,8 +823,8 @@ Examples:
                     sys.exit(1)
 
                 _write_output_list(assembly_paths)
-                if args.output_list:
-                    logger.info(f"Saved {len(assembly_paths)} accessions to {args.output_list}")
+                if output_list:
+                    logger.info(f"Saved {len(assembly_paths)} accessions to {output_list}")
 
                 _process_batch(assembly_paths, is_assembly_path=True)
 
@@ -862,6 +858,63 @@ Examples:
         for file_info in no_checksum_files:
             status = "(existing)" if file_info['status'] == 'exists_in_minio' else "(newly uploaded)"
             logger.warning(f"  - {file_info['entry']} / {file_info['filename']} {status}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Download genome files from NCBI to MinIO',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Download from accession list file
+  python download_genomes.py list_of_accessions.txt
+  
+  # Download all genomes under a prefix
+  python download_genomes.py --prefix GCF
+  python download_genomes.py --prefix GCF/000/001
+  python download_genomes.py --prefix GCA/000
+
+  # Resume from a specific subdirectory
+  python download_genomes.py --prefix GCF --start-from 003
+  python download_genomes.py --prefix GCA --start-from 001
+        """
+    )
+
+    parser.add_argument('input_file', nargs='?', help='File with list of accessions')
+    parser.add_argument('--prefix', help='FTP prefix to download all genomes from (e.g., GCF, GCF/000/001)')
+    parser.add_argument('--start-from', metavar='SUBDIR',
+                        help='Skip top-level subdirectories under --prefix that sort before SUBDIR '
+                             '(e.g., --prefix GCF --start-from 003 processes GCF/003/, GCF/004/, ...)')
+    parser.add_argument('--output-list', help='Output file to save list of assemblies found (use with --prefix)')
+    parser.add_argument('--ftp-host', default='ftp.ncbi.nlm.nih.gov', help='FTP host (default: ftp.ncbi.nlm.nih.gov)')
+    parser.add_argument('--threads', type=int, default=1, metavar='N',
+                        help='Number of parallel download threads (default: 1)')
+    parser.add_argument('--limit', type=int, metavar='N', help='Limit processing to first N accessions (for testing)')
+
+    args = parser.parse_args()
+
+    # Validate arguments
+    if not args.input_file and not args.prefix:
+        parser.error('Either provide an input file or use --prefix')
+
+    if args.input_file and args.prefix:
+        parser.error('Cannot use both input file and --prefix at the same time')
+
+    if args.output_list and not args.prefix:
+        parser.error('--output-list can only be used with --prefix')
+
+    if args.start_from and not args.prefix:
+        parser.error('--start-from can only be used with --prefix')
+
+    run(
+        input_file=args.input_file,
+        prefix=args.prefix,
+        start_from=args.start_from,
+        output_list=args.output_list,
+        ftp_host=args.ftp_host,
+        threads=args.threads,
+        limit=args.limit,
+    )
 
 
 if __name__ == '__main__':
