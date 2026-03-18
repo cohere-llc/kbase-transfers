@@ -801,7 +801,24 @@ def run(
                     logger.info(f"  Found {len(subdir_paths)} assemblies in {subdir}")
                     _write_output_list(subdir_paths)
 
+                    success_before = success_count
+                    failed_before = len(failed)
+
                     limit_reached = _process_batch(subdir_paths, is_assembly_path=True)
+
+                    # Per-subdirectory summary
+                    sub_success = success_count - success_before
+                    sub_failed_entries = failed[failed_before:]
+                    logger.info(
+                        f"  Subdir {subdir} summary: "
+                        f"{len(subdir_paths)} attempted, "
+                        f"{sub_success} succeeded, "
+                        f"{len(sub_failed_entries)} failed"
+                    )
+                    if sub_failed_entries:
+                        for entry, error in sub_failed_entries:
+                            logger.info(f"    - {entry}: {error}")
+
                     if limit_reached:
                         break
 

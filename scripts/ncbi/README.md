@@ -126,26 +126,59 @@ uv run python scripts/ncbi/download_genomes.py scripts/ncbi/test_list.txt
 uv run python scripts/ncbi/download_genomes.py scripts/ncbi/test_list.txt --limit 2
 ```
 
-### Advanced Usage
+### Prefix-based Usage
 
 ```bash
-# Download all genomes under a specific prefix
+# Download all genomes under a specific FTP prefix
 uv run python scripts/ncbi/download_genomes.py --prefix GCF/000/001
 
-# Download from prefix and save assembly list
+# Download from a broad prefix and save the discovered accession list
 uv run python scripts/ncbi/download_genomes.py --prefix GCF/000 --output-list assemblies.txt
 
-# Use with limit for testing
-uv run python scripts/ncbi/download_genomes.py --prefix GCF/000/001 --limit 5
+# Use multiple threads for faster parallel downloads
+uv run python scripts/ncbi/download_genomes.py --prefix GCF/000/001 --threads 8
+
+# Resume an interrupted run from a specific top-level subdirectory,
+# processing one subdirectory at a time to avoid building a huge list upfront
+uv run python scripts/ncbi/download_genomes.py --prefix GCF --start-from 003 --threads 8
+
+# Combine all options for a large-scale resumable run
+uv run python scripts/ncbi/download_genomes.py \
+  --prefix GCF \
+  --start-from 003 \
+  --output-list gcf_accessions.txt \
+  --threads 8 \
+  --limit 1000
+```
+
+### Python API Usage
+
+`run()` can also be called directly from Python (e.g. from a notebook):
+
+```python
+from scripts.ncbi.download_genomes import run
+
+# Download from an accession list file
+run(input_file='scripts/ncbi/test_list.txt')
+
+# Download all assemblies under a prefix, 4 threads, stop after 100
+run(prefix='GCF', limit=100, threads=4)
+
+# Resume a prefix run from subdirectory '003', saving discovered accessions
+run(prefix='GCF', start_from='003', output_list='gcf_accessions.txt', threads=8)
 ```
 
 ### Command-Line Options
 
-- `input_file` - File with list of accessions (one per line)
-- `--prefix PREFIX` - FTP prefix to download all genomes from (e.g., `GCF`, `GCF/000/001`)
-- `--output-list FILE` - Output file to save list of assemblies found (use with `--prefix`)
-- `--ftp-host HOST` - FTP host (default: `ftp.ncbi.nlm.nih.gov`)
-- `--limit N` - Limit processing to first N accessions (for testing)
+| Option | Description |
+|--------|-------------|
+| `input_file` | File with list of accessions, one per line (mutually exclusive with `--prefix`) |
+| `--prefix PREFIX` | FTP sub-path under `/genomes/all/` to scan recursively, e.g. `GCF` or `GCF/000/001` (mutually exclusive with `input_file`) |
+| `--start-from SUBDIR` | When using `--prefix`, skip top-level subdirectories that sort before `SUBDIR` (e.g. `003`). Useful for resuming an interrupted run. |
+| `--output-list FILE` | File to write discovered accession IDs incrementally (only valid with `--prefix`) |
+| `--ftp-host HOST` | FTP hostname (default: `ftp.ncbi.nlm.nih.gov`) |
+| `--threads N` | Number of parallel download threads (default: `1`) |
+| `--limit N` | Stop after N assemblies have been attempted (useful for smoke-testing) |
 
 **Note:** Either provide an `input_file` or use `--prefix`, but not both.
 
