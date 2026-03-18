@@ -12,7 +12,6 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ftplib import FTP
 from pathlib import Path
-import time
 import tempfile
 import hashlib
 import logging
@@ -210,10 +209,13 @@ file_filters = [
 def compute_md5(file_path):
     """
     Compute MD5 checksum of a file.
+
+    Uses 1 MiB read chunks to minimise the number of Python-level loop
+    iterations (and GIL acquisitions) for large files.
     """
     md5_hash = hashlib.md5()
     with open(file_path, 'rb') as f:
-        for chunk in iter(lambda: f.read(4096), b""):
+        for chunk in iter(lambda: f.read(1 << 20), b""):
             md5_hash.update(chunk)
     return md5_hash.hexdigest()
 
@@ -489,18 +491,17 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
         downloaded_resources = []
         
         for filename in target_files:
-            # Check if file exists in MinIO
-            existing_objects = s3_client.list_objects(minio_bucket, prefix=s3_path + filename)
-            file_exists = bool(existing_objects)
-            
+            # Single HEAD request: tells us whether the file exists AND its stored md5
+            obj_info = s3_client.stat_object(minio_bucket, s3_path + filename)
+            file_exists = obj_info is not None
+
             local_file = local_dir / filename
             expected_checksum = md5_checksums.get(filename)
             
             # If file exists in MinIO and we have a checksum, verify it first
             if file_exists and expected_checksum:
                 logger.info(f"  File exists in MinIO, verifying: {filename}")
-                # Fast path: check stored metadata checksum (HEAD request, no download)
-                obj_info = s3_client.stat_object(minio_bucket, s3_path + filename)
+                # Fast path: check stored metadata checksum (no download needed)
                 if obj_info and obj_info.get('md5') == expected_checksum:
                     logger.info(f"    ✓ Checksum verified via metadata, skipping download: {expected_checksum}")
                     resource = {
@@ -543,8 +544,7 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
                     logger.info(f"    Will re-download from NCBI")
             elif file_exists:
                 logger.info(f"  File exists in MinIO (no checksum available): {filename}")
-                # Use HEAD to get size without downloading
-                obj_info = s3_client.stat_object(minio_bucket, s3_path + filename)
+                # obj_info already contains size from the HEAD request above
                 file_size = obj_info.get('size') if obj_info else None
                 resource = {
                     "name": filename,
@@ -732,7 +732,9 @@ def run(
     def _download_one(entry, is_assembly_path=False):
         """Download a single assembly in its own temp subdir and MinIO client. Returns (entry, error|None)."""
         assembly_tmp = tempfile.mkdtemp(dir=temp_dir.name)
-        thread_s3 = get_minio_client()  # Each thread gets its own connection pool
+        # MinioClient() gives each thread its own boto3 session/connection pool.
+        # Bucket/prefix validation was already done by get_minio_client() at startup.
+        thread_s3 = MinioClient()
         try:
             download_genome_files(
                 entry, thread_s3, assembly_tmp, failed_transfers, no_checksum_files,
@@ -764,7 +766,6 @@ def run(
                         success_count += 1
                     if limit and (success_count + len(failed)) >= limit:
                         limit_reached = True
-                time.sleep(0.5)  # Be nice to NCBI servers
         return limit_reached
 
     if input_file:
