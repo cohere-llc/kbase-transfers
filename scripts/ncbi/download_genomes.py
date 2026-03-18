@@ -688,7 +688,13 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
         raise
     
     finally:
-        ftp.quit()
+        try:
+            ftp.quit()
+        except Exception:
+            # The control connection may have timed out after all work was
+            # completed (421 during QUIT).  All files and metadata have
+            # already been uploaded at this point, so silently ignore.
+            pass
 
 
 def run(
