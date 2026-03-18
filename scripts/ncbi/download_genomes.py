@@ -739,9 +739,6 @@ def run(
         limit:       Stop after this many assemblies have been attempted
                      (handy for smoke-testing).
     """
-    # Set up logging
-    log_file = setup_logging(module_name=__name__)
-    logger.info(f"Logging to: {log_file}")
 
     # Initialize MinIO client and temp dir (needed for all modes)
     s3 = get_minio_client()
@@ -987,6 +984,10 @@ Examples:
 
     if args.start_from and not args.prefix:
         parser.error('--start-from can only be used with --prefix')
+    
+    # Set up logging
+    log_file = setup_logging(module_name=__name__)
+    logger.info(f"Logging to: {log_file}")
 
     run(
         input_file=args.input_file,
