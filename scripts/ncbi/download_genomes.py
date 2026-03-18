@@ -17,6 +17,7 @@ import hashlib
 import logging
 import argparse
 import socket
+import time
 from datetime import datetime
 
 from frictionless import Package
@@ -489,8 +490,21 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
         
         # Download files and track successful downloads
         downloaded_resources = []
+        # Track last FTP protocol activity to send NOOP before long MinIO operations.
+        # Cloud NAT gateways kill idle TCP connections after ~60 s even with TCP keepalive;
+        # an FTP NOOP is application-layer traffic that resets every NAT/firewall timer.
+        last_ftp_activity = time.monotonic()
         
         for filename in target_files:
+            # If the FTP control connection has been idle for too long, ping it with NOOP
+            # before performing a potentially slow MinIO HEAD request.
+            if time.monotonic() - last_ftp_activity > 25:
+                try:
+                    ftp.sendcmd('NOOP')
+                    last_ftp_activity = time.monotonic()
+                    logger.debug("  Sent FTP NOOP to keep control connection alive")
+                except Exception as noop_err:
+                    logger.warning(f"  FTP NOOP failed: {noop_err}")
             # Single HEAD request: tells us whether the file exists AND its stored md5
             obj_info = s3_client.stat_object(minio_bucket, s3_path + filename)
             file_exists = obj_info is not None
@@ -522,13 +536,17 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
                 actual_checksum = compute_md5(local_file)
                 if actual_checksum == expected_checksum:
                     logger.info(f"    ✓ Checksum verified, skipping download: {actual_checksum}")
-                    # Backfill metadata so future runs use the fast path
-                    s3_client.upload_file(
+                    # Backfill metadata so future runs use the fast path.
+                    # Use a server-side copy (no data transfer) to update metadata only.
+                    backfilled = s3_client.update_metadata(
                         minio_bucket,
                         s3_path + filename,
-                        str(local_file),
-                        metadata={'md5': actual_checksum}
+                        {'md5': actual_checksum}
                     )
+                    if backfilled:
+                        logger.debug(f"    Backfilled md5 metadata for: {filename}")
+                    else:
+                        logger.warning(f"    Could not backfill md5 metadata for: {filename}")
                     file_size = local_file.stat().st_size
                     resource = {
                         "name": filename,
@@ -570,6 +588,7 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
                 # Download from FTP
                 with open(local_file, 'wb') as f:
                     ftp.retrbinary(f'RETR {filename}', f.write)
+                last_ftp_activity = time.monotonic()
                 
                 # Verify checksum if available
                 if expected_checksum:

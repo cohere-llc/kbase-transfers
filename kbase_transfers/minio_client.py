@@ -35,6 +35,25 @@ class MinioClient:
     def download_file(self, bucket_name, object_name, file_path):
         self.s3.download_file(bucket_name, object_name, file_path)
 
+    def update_metadata(self, bucket_name, object_name, metadata):
+        """Update user metadata on an existing object via a server-side copy.
+
+        Copies the object to itself with MetadataDirective='REPLACE' so only
+        the metadata changes — no bytes are transferred over the network.
+        Returns True on success, False if the operation fails.
+        """
+        try:
+            self.s3.copy_object(
+                Bucket=bucket_name,
+                Key=object_name,
+                CopySource={'Bucket': bucket_name, 'Key': object_name},
+                Metadata=metadata,
+                MetadataDirective='REPLACE',
+            )
+            return True
+        except Exception:
+            return False
+
     def stat_object(self, bucket_name, object_name):
         """Return {'size': int, 'md5': str|None} via a single HEAD request.
 
