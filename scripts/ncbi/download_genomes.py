@@ -7,6 +7,9 @@ import os
 import sys
 import re
 import json
+import shutil
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from ftplib import FTP
 from pathlib import Path
 import time
@@ -658,6 +661,8 @@ Examples:
                              '(e.g., --prefix GCF --start-from 003 processes GCF/003/, GCF/004/, ...)')
     parser.add_argument('--output-list', help='Output file to save list of assemblies found (use with --prefix)')
     parser.add_argument('--ftp-host', default='ftp.ncbi.nlm.nih.gov', help='FTP host (default: ftp.ncbi.nlm.nih.gov)')
+    parser.add_argument('--threads', type=int, default=1, metavar='N',
+                        help='Number of parallel download threads (default: 1)')
     parser.add_argument('--limit', type=int, metavar='N', help='Limit processing to first N accessions (for testing)')
     
     args = parser.parse_args()
@@ -683,11 +688,49 @@ Examples:
     s3 = get_minio_client()
     temp_dir = tempfile.TemporaryDirectory()
 
-    # Shared counters
+    # Shared counters / state — protected by a lock when accessed from threads
+    lock = threading.Lock()
     success_count = 0
     failed = []
     failed_transfers = []  # Track individual file transfer failures
     no_checksum_files = []  # Track files without checksums
+
+    def _download_one(entry, is_assembly_path=False):
+        """Download a single assembly in its own temp subdir. Returns (entry, error|None)."""
+        assembly_tmp = tempfile.mkdtemp(dir=temp_dir.name)
+        try:
+            download_genome_files(
+                entry, s3, assembly_tmp, failed_transfers, no_checksum_files,
+                ftp_host=args.ftp_host,
+                assembly_path=entry if is_assembly_path else None,
+            )
+            return entry, None
+        except Exception as e:
+            return entry, e
+        finally:
+            shutil.rmtree(assembly_tmp, ignore_errors=True)
+
+    def _process_batch(entries, is_assembly_path=False):
+        """Submit a batch of entries to the thread pool.
+
+        Returns True if the overall limit was reached after this batch.
+        """
+        nonlocal success_count
+        limit_reached = False
+        with ThreadPoolExecutor(max_workers=args.threads) as executor:
+            futures = {executor.submit(_download_one, e, is_assembly_path): e for e in entries}
+            for future in as_completed(futures):
+                entry, error = future.result()
+                with lock:
+                    if error:
+                        logger.error(f"  ✗ FAILED: {entry}")
+                        failed.append((entry, str(error)))
+                    else:
+                        success_count += 1
+                    if args.limit and (success_count + len(failed)) >= args.limit:
+                        limit_reached = True
+                time.sleep(0.5)  # Be nice to NCBI servers
+        return limit_reached
 
     if args.input_file:
         # ── File-based mode ────────────────────────────────────────────────
@@ -705,16 +748,7 @@ Examples:
             accessions = accessions[:args.limit]
             logger.info(f"Limiting to first {args.limit} accessions")
 
-        for i, accession in enumerate(accessions, 1):
-            try:
-                logger.info(f"\n[{i}/{len(accessions)}] {accession}")
-                download_genome_files(accession, s3, temp_dir.name, failed_transfers, no_checksum_files,
-                                     ftp_host=args.ftp_host)
-                success_count += 1
-                time.sleep(0.5)  # Be nice to NCBI servers
-            except Exception as e:
-                logger.error(f"  ✗ FAILED: {accession}")
-                failed.append((accession, str(e)))
+        _process_batch(accessions, is_assembly_path=False)
 
     else:
         # ── Prefix-based mode ──────────────────────────────────────────────
@@ -736,25 +770,6 @@ Examples:
                     if m:
                         output_list_fh.write(m.group(1) + '\n')
                 output_list_fh.flush()
-
-        def _process_paths(paths):
-            """Download each assembly path; returns True if the limit was reached."""
-            nonlocal success_count
-            for entry in paths:
-                total_seen = success_count + len(failed) + 1
-                try:
-                    logger.info(f"\n[{total_seen}] {entry}")
-                    download_genome_files(entry, s3, temp_dir.name, failed_transfers, no_checksum_files,
-                                         ftp_host=args.ftp_host, assembly_path=entry)
-                    success_count += 1
-                    time.sleep(0.5)  # Be nice to NCBI servers
-                except Exception as e:
-                    logger.error(f"  ✗ FAILED: {entry}")
-                    failed.append((entry, str(e)))
-
-                if args.limit and (success_count + len(failed)) >= args.limit:
-                    return True  # limit reached
-            return False
 
         try:
             if args.start_from:
@@ -790,7 +805,7 @@ Examples:
                     logger.info(f"  Found {len(subdir_paths)} assemblies in {subdir}")
                     _write_output_list(subdir_paths)
 
-                    limit_reached = _process_paths(subdir_paths)
+                    limit_reached = _process_batch(subdir_paths, is_assembly_path=True)
                     if limit_reached:
                         break
 
@@ -815,7 +830,7 @@ Examples:
                 if args.output_list:
                     logger.info(f"Saved {len(assembly_paths)} accessions to {args.output_list}")
 
-                _process_paths(assembly_paths)
+                _process_batch(assembly_paths, is_assembly_path=True)
 
         finally:
             if output_list_fh:
