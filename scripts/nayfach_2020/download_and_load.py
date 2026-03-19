@@ -32,6 +32,24 @@ RAW_DATA_PATH = f"{BASE_PATH}/raw_data"
 METAGENOMES_PATH = f"{RAW_DATA_PATH}/metagenomes"
 MAGS_PATH = f"{RAW_DATA_PATH}/mags"
 
+# ---------------------------------------------------------------------------
+# File transfer filter rules.
+# Each entry controls which DTS files are included in the transfer and how
+# they are named at the destination.  Edit this list to change criteria.
+#
+# Fields:
+#   suffix    - include files whose path ends with this string (case-insensitive)
+#   filename  - include files whose basename exactly matches this string
+#   rename_to - destination filename template; {img_taxon_id} is substituted.
+#               Omit (or set to None) to keep the original basename.
+# ---------------------------------------------------------------------------
+FILE_FILTERS = [
+    {"suffix": ".fna"},
+    {"suffix": ".faa"},
+    {"suffix": ".gff"},
+    {"filename": "final.configs.fasta", "rename_to": "{img_taxon_id}.final.configs.fasta"},
+]
+
 
 def download_xlsx(data_dir, force=False):
     """Download the Excel file if it doesn't exist."""
@@ -65,6 +83,35 @@ def check_parent_paths_exist(client):
         )
     
     print(f"✓ Verified parent path exists: {BUCKET_NAME}:{BASE_PATH}/")
+
+
+def _filter_resources(resources, img_taxon_id):
+    """Apply FILE_FILTERS to a list of DTS resource dicts.
+
+    Returns a new list of dicts, each containing the original keys plus
+    'dest_name' — the filename to use when writing the file to its
+    destination.  Files that match no rule are excluded.
+    """
+    filtered = []
+    for resource in resources:
+        path_lower = resource['path'].lower()
+        basename = resource['path'].rsplit('/', 1)[-1]  # last path component
+        for rule in FILE_FILTERS:
+            matched = False
+            if 'suffix' in rule and path_lower.endswith(rule['suffix']):
+                matched = True
+            elif 'filename' in rule and basename == rule['filename']:
+                matched = True
+            if matched:
+                rename_to = rule.get('rename_to')
+                dest_name = (
+                    rename_to.format(img_taxon_id=img_taxon_id)
+                    if rename_to
+                    else basename
+                )
+                filtered.append({**resource, 'dest_name': dest_name})
+                break  # a file matches at most one rule
+    return filtered
 
 
 def query_dts_resources(img_taxon_id, dts_client, orcid, verbose=False):
@@ -189,10 +236,7 @@ def load_sheet(
                 dts_resources_found += 1
                 dts_resources_total += len(resources)
 
-            filtered_files = [
-                r for r in resources
-                if '.fna' in r['path'].lower() or '.gff' in r['path'].lower()
-            ]
+            filtered_files = _filter_resources(resources, dts_id)
 
             resources_data = {
                 "IMG_TAXON_ID": int(dts_id),
