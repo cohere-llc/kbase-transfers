@@ -38,16 +38,18 @@ MAGS_PATH = f"{RAW_DATA_PATH}/mags"
 # they are named at the destination.  Edit this list to change criteria.
 #
 # Fields:
-#   suffix    - include files whose path ends with this string (case-insensitive)
-#   filename  - include files whose basename exactly matches this string
+#   label     - human-readable name used as a column header in stats output.
+#   suffix    - include files whose path ends with this string (case-insensitive).
+#   filename  - include files whose basename exactly matches this string.
 #   rename_to - destination filename template; {img_taxon_id} is substituted.
 #               Omit (or set to None) to keep the original basename.
 # ---------------------------------------------------------------------------
 FILE_FILTERS = [
-    {"suffix": ".fna"},
-    {"suffix": ".faa"},
-    {"suffix": ".gff"},
-    {"filename": "final.configs.fasta", "rename_to": "{img_taxon_id}.final.configs.fasta"},
+    {"label": ".fna files",              "suffix": ".fna"},
+    {"label": ".faa files",              "suffix": ".faa"},
+    {"label": ".gff files",              "suffix": ".gff"},
+    {"label": "final.contigs.fasta",     "filename": "final.contigs.fasta",
+     "rename_to": "{img_taxon_id}.final.contigs.fasta"},
 ]
 
 
@@ -88,14 +90,15 @@ def check_parent_paths_exist(client):
 def _filter_resources(resources, img_taxon_id):
     """Apply FILE_FILTERS to a list of DTS resource dicts.
 
-    Returns a new list of dicts, each containing the original keys plus
-    'dest_name' — the filename to use when writing the file to its
-    destination.  Files that match no rule are excluded.
+    Returns a new list of dicts, each containing the original keys plus:
+      'dest_name'    - filename to use at the destination.
+      'filter_label' - the label of the matching FILE_FILTERS rule.
+    Files that match no rule are excluded.
     """
     filtered = []
     for resource in resources:
         path_lower = resource['path'].lower()
-        basename = resource['path'].rsplit('/', 1)[-1]  # last path component
+        basename = resource['path'].rsplit('/', 1)[-1]
         for rule in FILE_FILTERS:
             matched = False
             if 'suffix' in rule and path_lower.endswith(rule['suffix']):
@@ -109,9 +112,92 @@ def _filter_resources(resources, img_taxon_id):
                     if rename_to
                     else basename
                 )
-                filtered.append({**resource, 'dest_name': dest_name})
+                filtered.append({**resource, 'dest_name': dest_name, 'filter_label': rule['label']})
                 break  # a file matches at most one rule
     return filtered
+
+
+def _to_folder_id(value):
+    """Return a clean string id from a pandas cell value.
+
+    Floats are converted via int() to strip the Excel-added decimal
+    (e.g. 3300001234.0 → '3300001234').  Values that are already strings
+    (e.g. '3300028580_9') are returned as-is so underscores are preserved.
+    None/NaN yields None.
+    """
+    if not pd.notna(value):
+        return None
+    if isinstance(value, float):
+        return str(int(value))
+    return str(value)
+
+
+def collect_sheet_stats(xlsx_path, sheet_name, folder_col, dts_id_col, dts_client, orcid, limit=None, verbose=False):
+    """Query DTS for every row in a sheet and return a stats DataFrame.
+
+    Columns: id, dts_id, total_files, <one column per FILE_FILTERS label>.
+    """
+    df = pd.read_excel(xlsx_path, sheet_name=sheet_name)
+    if limit is not None:
+        df = df.head(limit)
+
+    filter_labels = [rule['label'] for rule in FILE_FILTERS]
+    rows = []
+
+    for i, (_, row) in enumerate(df.iterrows(), 1):
+        folder_id = _to_folder_id(row[folder_col])
+        dts_id = _to_folder_id(row[dts_id_col])
+
+        resources = query_dts_resources(dts_id, dts_client, orcid, verbose=verbose) if dts_id else []
+        filtered = _filter_resources(resources, dts_id) if dts_id else []
+
+        counts = {lbl: 0 for lbl in filter_labels}
+        for r in filtered:
+            counts[r['filter_label']] += 1
+
+        rows.append({'id': folder_id, 'dts_id': dts_id, 'total_files': len(resources), **counts})
+
+        if i % 100 == 0:
+            print(f"  Queried {i}/{len(df)} rows...")
+
+    return pd.DataFrame(rows)
+
+
+def write_stats_xlsx(output_path, metagenome_stats, mag_stats):
+    """Write per-row stats and a summary sheet to an Excel file."""
+    filter_labels = [rule['label'] for rule in FILE_FILTERS]
+
+    def _summary_block(stats_df, sheet_label):
+        """Return a list of (metric, value) pairs for one sheet."""
+        total = len(stats_df)
+        no_files = (stats_df['total_files'] == 0).sum()
+        has_files = total - no_files
+        no_filtered = has_files - (stats_df[filter_labels].sum(axis=1) > 0).sum()
+        pairs = [
+            (f"[{sheet_label}] Total records", total),
+            (f"[{sheet_label}] Records with DTS files", int(has_files)),
+            (f"[{sheet_label}] Records with no DTS files", int(no_files)),
+            (f"[{sheet_label}] Records with DTS files but no filtered matches", int(no_filtered)),
+            (f"[{sheet_label}] Total DTS files found", int(stats_df['total_files'].sum())),
+        ]
+        for lbl in filter_labels:
+            pairs.append((f"[{sheet_label}] Records with 0 '{lbl}'", int((stats_df[lbl] == 0).sum())))
+            pairs.append((f"[{sheet_label}] Total '{lbl}' across all records", int(stats_df[lbl].sum())))
+        return pairs
+
+    summary_rows = (
+        _summary_block(metagenome_stats, 'S1 metagenomes')
+        + [('', '')]  # blank separator row
+        + _summary_block(mag_stats, 'S2 MAGs')
+    )
+    summary_df = pd.DataFrame(summary_rows, columns=['Metric', 'Value'])
+
+    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+        metagenome_stats.to_excel(writer, sheet_name='S1 metagenomes', index=False)
+        mag_stats.to_excel(writer, sheet_name='S2 MAGs', index=False)
+        summary_df.to_excel(writer, sheet_name='Summary', index=False)
+
+    print(f"\n✓ Stats written to {output_path}")
 
 
 def query_dts_resources(img_taxon_id, dts_client, orcid, verbose=False):
@@ -135,9 +221,9 @@ def query_dts_resources(img_taxon_id, dts_client, orcid, verbose=False):
         for entry in results:
             entry_dict = entry.to_dict()
             resources.append({
-                'id': entry_dict['id'],
-                'path': entry_dict['path'],
-                'bytes': entry_dict['bytes']
+                'id': entry_dict.get('id'),
+                'path': entry_dict.get('path', ''),
+                'bytes': entry_dict.get('bytes'),
             })
         
         if verbose:
@@ -193,19 +279,8 @@ def load_sheet(
     dts_resources_total = 0
 
     for idx, row in df.iterrows():
-        # Derive folder name: coerce to int when the value is numeric (Excel
-        # stores large ints as floats, so IMG_TAXON_ID would otherwise become
-        # "3300001234.0"), fall back to plain string for alphanumeric ids.
-        raw_folder = row[folder_col]
-        if pd.notna(raw_folder):
-            try:
-                folder_id = str(int(raw_folder))
-            except (ValueError, TypeError):
-                folder_id = str(raw_folder)
-        else:
-            folder_id = None
-
-        dts_id = str(int(row[dts_id_col])) if pd.notna(row[dts_id_col]) else None
+        folder_id = _to_folder_id(row[folder_col])
+        dts_id = _to_folder_id(row[dts_id_col])
 
         # Convert row to a plain Python dict, handling NaN values
         record = {}
@@ -309,6 +384,13 @@ def main():
         action='store_true',
         help='Enable verbose logging for DTS queries'
     )
+    parser.add_argument(
+        '--stats-output',
+        type=str,
+        metavar='FILE',
+        help='Collect DTS availability stats and write to this Excel file (e.g. stats.xlsx); '
+             'skips the normal MinIO upload'
+    )
     
     args = parser.parse_args()
     
@@ -359,6 +441,25 @@ def main():
     else:
         print("\nSkipping DTS integration (--skip-dts flag set)")
     
+    # Stats-only mode
+    if args.stats_output:
+        if not (dts_client and args.dts_orcid):
+            print("Error: --stats-output requires DTS credentials (--dts-token and --dts-orcid).")
+            sys.exit(1)
+        print("\nCollecting stats for S1 metagenomes...")
+        metagenome_stats = collect_sheet_stats(
+            xlsx_path, sheet_name='S1', folder_col='IMG_TAXON_ID', dts_id_col='IMG_TAXON_ID',
+            dts_client=dts_client, orcid=args.dts_orcid, limit=args.limit, verbose=args.verbose,
+        )
+        print("\nCollecting stats for S2 MAGs...")
+        mag_stats = collect_sheet_stats(
+            xlsx_path, sheet_name='S2', folder_col='genome_id', dts_id_col='img_taxon_id',
+            dts_client=dts_client, orcid=args.dts_orcid, limit=args.limit, verbose=args.verbose,
+        )
+        write_stats_xlsx(args.stats_output, metagenome_stats, mag_stats)
+        print("\n✓ All done!")
+        return
+
     # Load data
     shared = dict(dry_run=args.dry_run, limit=args.limit,
                   dts_client=dts_client, orcid=args.dts_orcid, verbose=args.verbose)
@@ -366,7 +467,7 @@ def main():
                dest_path=METAGENOMES_PATH, folder_col='IMG_TAXON_ID', dts_id_col='IMG_TAXON_ID', **shared)
     load_sheet(client, xlsx_path, sheet_name='S2', label='MAGs',
                dest_path=MAGS_PATH, folder_col='genome_id', dts_id_col='img_taxon_id', **shared)
-    
+
     print("\n✓ All done!")
 
 
