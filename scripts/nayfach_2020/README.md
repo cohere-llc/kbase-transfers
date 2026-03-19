@@ -81,15 +81,19 @@ cdm-lake/
                 └── raw_data/
                     ├── metagenomes/
                     │   ├── 2001200001/
-                    │   │   └── metagenome.json
+                    │   │   ├── gems_info.json
+                    │   │   └── resources.json
                     │   ├── 2001200002/
-                    │   │   └── metagenome.json
+                    │   │   ├── gems_info.json
+                    │   │   └── resources.json
                     │   └── ...
                     └── mags/
-                        ├── 3300028580_9/
-                        │   └── mag.json
-                        ├── 3300028580_5/
-                        │   └── mag.json
+                        ├── 3300028580/
+                        │   ├── gems_info.json
+                        │   └── resources.json
+                        ├── 3300028580/
+                        │   ├── gems_info.json
+                        │   └── resources.json
                         └── ...
 ```
 

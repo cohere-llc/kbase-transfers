@@ -15,9 +15,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from kbase_transfers import MinioClient
 from scripts.nayfach_2020.download_and_load import (
-    download_xlsx, 
-    load_metagenomes, 
-    load_mags,
+    download_xlsx,
+    load_sheet,
     BUCKET_NAME,
     BASE_PATH,
     METAGENOMES_PATH,
@@ -64,24 +63,26 @@ class TestNayfachIntegration(unittest.TestCase):
     def test_load_metagenomes(self):
         """Test loading metagenomes to MinIO."""
         # Load a small number of metagenomes
-        load_metagenomes(self.client, self.xlsx_path, dry_run=False, limit=self.test_limit)
-        
+        load_sheet(self.client, self.xlsx_path, sheet_name='S1', label='metagenomes',
+                   dest_path=METAGENOMES_PATH, folder_col='IMG_TAXON_ID',
+                   dts_id_col='IMG_TAXON_ID', dry_run=False, limit=self.test_limit)
+
         # Verify the metagenomes were created
         objects = self.client.list_objects(BUCKET_NAME, METAGENOMES_PATH + "/")
         metagenome_ids = set()
-        
+
         for obj in objects:
-            if obj.endswith('/metagenome.json'):
+            if obj.endswith('/gems_info.json'):
                 # Extract IMG_TAXON_ID from path
                 parts = obj.split('/')
                 metagenome_id = parts[-2]
                 metagenome_ids.add(metagenome_id)
-        
+
         # Should have at least the test_limit number of metagenomes
         self.assertGreaterEqual(len(metagenome_ids), self.test_limit)
-        
+
         # Verify one metagenome JSON structure
-        first_object = [obj for obj in objects if obj.endswith('/metagenome.json')][0]
+        first_object = [obj for obj in objects if obj.endswith('/gems_info.json')][0]
         response = self.client.s3.get_object(Bucket=BUCKET_NAME, Key=first_object)
         data = json.loads(response['Body'].read())
         
@@ -99,24 +100,26 @@ class TestNayfachIntegration(unittest.TestCase):
     def test_load_mags(self):
         """Test loading MAGs to MinIO."""
         # Load a small number of MAGs
-        load_mags(self.client, self.xlsx_path, dry_run=False, limit=self.test_limit)
-        
+        load_sheet(self.client, self.xlsx_path, sheet_name='S2', label='MAGs',
+                   dest_path=MAGS_PATH, folder_col='genome_id',
+                   dts_id_col='img_taxon_id', dry_run=False, limit=self.test_limit)
+
         # Verify the MAGs were created
         objects = self.client.list_objects(BUCKET_NAME, MAGS_PATH + "/")
         mag_ids = set()
-        
+
         for obj in objects:
-            if obj.endswith('/mag.json'):
+            if obj.endswith('/gems_info.json'):
                 # Extract genome_id from path
                 parts = obj.split('/')
                 mag_id = parts[-2]
                 mag_ids.add(mag_id)
-        
+
         # Should have at least the test_limit number of MAGs
         self.assertGreaterEqual(len(mag_ids), self.test_limit)
-        
+
         # Verify one MAG JSON structure
-        first_object = [obj for obj in objects if obj.endswith('/mag.json')][0]
+        first_object = [obj for obj in objects if obj.endswith('/gems_info.json')][0]
         response = self.client.s3.get_object(Bucket=BUCKET_NAME, Key=first_object)
         data = json.loads(response['Body'].read())
         
@@ -135,11 +138,13 @@ class TestNayfachIntegration(unittest.TestCase):
     def test_json_content_integrity(self):
         """Test that JSON data is properly formatted and contains expected values."""
         # Load one record
-        load_metagenomes(self.client, self.xlsx_path, dry_run=False, limit=1)
-        
+        load_sheet(self.client, self.xlsx_path, sheet_name='S1', label='metagenomes',
+                   dest_path=METAGENOMES_PATH, folder_col='IMG_TAXON_ID',
+                   dts_id_col='IMG_TAXON_ID', dry_run=False, limit=1)
+
         # Get the first metagenome
         objects = self.client.list_objects(BUCKET_NAME, METAGENOMES_PATH + "/")
-        metagenome_objects = [obj for obj in objects if obj.endswith('/metagenome.json')]
+        metagenome_objects = [obj for obj in objects if obj.endswith('/gems_info.json')]
         self.assertGreater(len(metagenome_objects), 0, "No metagenome objects found")
         
         # Retrieve and verify JSON

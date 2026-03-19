@@ -106,43 +106,64 @@ def query_dts_resources(img_taxon_id, dts_client, orcid, verbose=False):
         return []
 
 
-def load_metagenomes(client, xlsx_path, dry_run=False, limit=None, dts_client=None, orcid=None, verbose=False):
-    """Load metagenome data from S1 sheet into MinIO."""
-    print("\nLoading metagenomes from S1 sheet...")
-    
+def load_sheet(
+    client,
+    xlsx_path,
+    sheet_name,
+    label,
+    dest_path,
+    folder_col,
+    dts_id_col,
+    dry_run=False,
+    limit=None,
+    dts_client=None,
+    orcid=None,
+    verbose=False,
+):
+    """Load one sheet from the Excel file into MinIO.
+
+    Args:
+        sheet_name:  Excel sheet to read (e.g. 'S1', 'S2').
+        label:       Human-readable name used in progress messages (e.g. 'metagenomes').
+        dest_path:   MinIO path prefix for this dataset (e.g. METAGENOMES_PATH).
+        folder_col:  Column whose value becomes the per-record folder name.
+        dts_id_col:  Column whose value is used as the IMG_TAXON_ID for DTS queries.
+    """
+    print(f"\nLoading {label} from {sheet_name} sheet...")
+
     if dts_client:
         print("  DTS integration enabled - will query for file resources")
-    
-    # Read the S1 sheet
-    df = pd.read_excel(xlsx_path, sheet_name='S1')
-    print(f"Found {len(df)} metagenomes in S1 sheet")
 
-    # Apply limit if specified
+    df = pd.read_excel(xlsx_path, sheet_name=sheet_name)
+    print(f"Found {len(df)} {label} in {sheet_name} sheet")
+
     if limit is not None:
         df = df.head(limit)
-        print(f"Limiting to first {limit} metagenomes for testing")
-    
-    # Track DTS statistics
+        print(f"Limiting to first {limit} {label} for testing")
+
     dts_queries = 0
     dts_resources_found = 0
     dts_resources_total = 0
-    
-    # Process each row
+
     for idx, row in df.iterrows():
-        # Check if IMG_TAXON_ID column exists
-        if 'IMG_TAXON_ID' not in df.columns:
-            if idx == 0:  # Only warn once
-                print("  Warning: IMG_TAXON_ID column not found in S1 sheet. Available columns:", list(df.columns))
-                print("  Skipping DTS queries for metagenomes.")
-            img_taxon_id = None
+        # Derive folder name: coerce to int when the value is numeric (Excel
+        # stores large ints as floats, so IMG_TAXON_ID would otherwise become
+        # "3300001234.0"), fall back to plain string for alphanumeric ids.
+        raw_folder = row[folder_col]
+        if pd.notna(raw_folder):
+            try:
+                folder_id = str(int(raw_folder))
+            except (ValueError, TypeError):
+                folder_id = str(raw_folder)
         else:
-            img_taxon_id = str(int(row['IMG_TAXON_ID'])) if pd.notna(row['IMG_TAXON_ID']) else None
-        
-        # Convert row to dictionary, handling NaN values
+            folder_id = None
+
+        dts_id = str(int(row[dts_id_col])) if pd.notna(row[dts_id_col]) else None
+
+        # Convert row to a plain Python dict, handling NaN values
         record = {}
         for col in df.columns:
             value = row[col]
-            # Convert pandas types to Python native types
             if pd.isna(value):
                 record[col] = None
             elif isinstance(value, (pd.Int64Dtype, int)):
@@ -151,138 +172,44 @@ def load_metagenomes(client, xlsx_path, dry_run=False, limit=None, dts_client=No
                 record[col] = float(value)
             else:
                 record[col] = str(value)
-        
-        # Create the object path
-        object_path = f"{METAGENOMES_PATH}/{img_taxon_id}/metagenome.json"
-        
+
+        object_path = f"{dest_path}/{folder_id}/gems_info.json"
+
         if dry_run:
             print(f"  [DRY RUN] Would upload: {object_path}")
         else:
             client.put_json_object(BUCKET_NAME, object_path, record)
             if (idx + 1) % 100 == 0:
-                print(f"  Uploaded {idx + 1}/{len(df)} metagenomes...")
-        
-        # Query DTS for file resources if DTS client is available
-        # Always create resources.json, even if no files found
-        if dts_client and orcid and img_taxon_id:
+                print(f"  Uploaded {idx + 1}/{len(df)} {label}...")
+
+        if dts_client and orcid and dts_id:
             dts_queries += 1
-            resources = query_dts_resources(img_taxon_id, dts_client, orcid, verbose=verbose)
+            resources = query_dts_resources(dts_id, dts_client, orcid, verbose=verbose)
             if resources:
                 dts_resources_found += 1
                 dts_resources_total += len(resources)
-            
-            # Structure resources.json with IMG_TAXON_ID and associated_files
-            # Filter for .fna and .gff files
+
             filtered_files = [
-                r for r in resources 
+                r for r in resources
                 if '.fna' in r['path'].lower() or '.gff' in r['path'].lower()
             ]
-            
+
             resources_data = {
-                "IMG_TAXON_ID": int(img_taxon_id),
+                "IMG_TAXON_ID": int(dts_id),
                 "associated_files": resources,
-                "filtered_files": filtered_files
+                "filtered_files": filtered_files,
             }
-            
-            resources_path = f"{METAGENOMES_PATH}/{img_taxon_id}/resources.json"
+
+            resources_path = f"{dest_path}/{folder_id}/resources.json"
             if dry_run:
                 print(f"  [DRY RUN] Would upload resources.json ({len(resources)} files) to: {resources_path}")
             else:
                 client.put_json_object(BUCKET_NAME, resources_path, resources_data)
-    
-    if not dry_run:
-        print(f"✓ Successfully uploaded {len(df)} metagenomes to {BUCKET_NAME}:{METAGENOMES_PATH}/")
-        if dts_client and orcid:
-            print(f"  DTS: Queried {dts_queries} metagenomes, found resources for {dts_resources_found} ({dts_resources_total} total files)")
 
-
-def load_mags(client, xlsx_path, dry_run=False, limit=None, dts_client=None, orcid=None, verbose=False):
-    """Load MAG data from S2 sheet into MinIO."""
-    print("\nLoading MAGs from S2 sheet...")
-    
-    if dts_client:
-        print("  DTS integration enabled - will query for file resources")
-    
-    # Read the S2 sheet
-    df = pd.read_excel(xlsx_path, sheet_name='S2')
-    print(f"Found {len(df)} MAGs in S2 sheet")
-    
-    # Apply limit if specified
-    if limit is not None:
-        df = df.head(limit)
-        print(f"Limiting to first {limit} MAGs for testing")
-    
-    # Track DTS statistics
-    dts_queries = 0
-    dts_resources_found = 0
-    dts_resources_total = 0
-    
-    # Process each row
-    for idx, row in df.iterrows():
-        genome_id = str(row['genome_id'])
-        
-        # Convert row to dictionary, handling NaN values
-        record = {}
-        for col in df.columns:
-            value = row[col]
-            # Convert pandas types to Python native types
-            if pd.isna(value):
-                record[col] = None
-            elif isinstance(value, (pd.Int64Dtype, int)):
-                record[col] = int(value)
-            elif isinstance(value, float):
-                record[col] = float(value)
-            else:
-                record[col] = str(value)
-        
-        # For table S2 it seems like the img_taxon_id is just the genome id without the trailing `_123`
-        if 'img_taxon_id' in df.columns:
-            img_taxon_id = str(int(row['img_taxon_id'])) if pd.notna(row['img_taxon_id']) else None
-        else:
-            img_taxon_id = None
-        
-        # Create the object path
-        object_path = f"{MAGS_PATH}/{genome_id}/mag.json"
-        
-        if dry_run:
-            print(f"  [DRY RUN] Would upload: {object_path}")
-        else:
-            client.put_json_object(BUCKET_NAME, object_path, record)
-            if (idx + 1) % 500 == 0:
-                print(f"  Uploaded {idx + 1}/{len(df)} MAGs...")
-        
-        # Query DTS for file resources if DTS client is available and IMG_TAXON_ID exists
-        # Always create resources.json, even if no files found
-        if dts_client and orcid and img_taxon_id:
-            dts_queries += 1
-            resources = query_dts_resources(img_taxon_id, dts_client, orcid, verbose=verbose)
-            if resources:
-                dts_resources_found += 1
-                dts_resources_total += len(resources)
-            
-            # Structure resources.json with IMG_TAXON_ID and associated_files
-            # Filter for .fna and .gff files
-            filtered_files = [
-                r for r in resources 
-                if '.fna' in r['path'].lower() or '.gff' in r['path'].lower()
-            ]
-            
-            resources_data = {
-                "IMG_TAXON_ID": int(img_taxon_id),
-                "associated_files": resources,
-                "filtered_files": filtered_files
-            }
-            
-            resources_path = f"{MAGS_PATH}/{genome_id}/resources.json"
-            if dry_run:
-                print(f"  [DRY RUN] Would upload resources.json ({len(resources)} files) to: {resources_path}")
-            else:
-                client.put_json_object(BUCKET_NAME, resources_path, resources_data)
-    
     if not dry_run:
-        print(f"✓ Successfully uploaded {len(df)} MAGs to {BUCKET_NAME}:{MAGS_PATH}/")
+        print(f"✓ Successfully uploaded {len(df)} {label} to {BUCKET_NAME}:{dest_path}/")
         if dts_client and orcid:
-            print(f"  DTS: Queried {dts_queries} MAGs, found resources for {dts_resources_found} ({dts_resources_total} total files)")
+            print(f"  DTS: Queried {dts_queries} {label}, found resources for {dts_resources_found} ({dts_resources_total} total files)")
 
 
 def main():
@@ -389,10 +316,12 @@ def main():
         print("\nSkipping DTS integration (--skip-dts flag set)")
     
     # Load data
-    load_metagenomes(client, xlsx_path, dry_run=args.dry_run, limit=args.limit, 
-                    dts_client=dts_client, orcid=args.dts_orcid, verbose=args.verbose)
-    load_mags(client, xlsx_path, dry_run=args.dry_run, limit=args.limit,
-             dts_client=dts_client, orcid=args.dts_orcid, verbose=args.verbose)
+    shared = dict(dry_run=args.dry_run, limit=args.limit,
+                  dts_client=dts_client, orcid=args.dts_orcid, verbose=args.verbose)
+    load_sheet(client, xlsx_path, sheet_name='S1', label='metagenomes',
+               dest_path=METAGENOMES_PATH, folder_col='IMG_TAXON_ID', dts_id_col='IMG_TAXON_ID', **shared)
+    load_sheet(client, xlsx_path, sheet_name='S2', label='MAGs',
+               dest_path=MAGS_PATH, folder_col='genome_id', dts_id_col='img_taxon_id', **shared)
     
     print("\n✓ All done!")
 
