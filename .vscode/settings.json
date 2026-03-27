@@ -1,6 +1,7 @@
 {
     "chat.tools.terminal.autoApprove": {
         ".venv/bin/python": true,
-        "uv": true
+        "uv": true,
+        "zcat": true
     }
 }

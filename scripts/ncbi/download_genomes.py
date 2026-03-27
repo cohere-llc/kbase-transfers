@@ -10,7 +10,7 @@ import json
 import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from ftplib import FTP
+from ftplib import FTP, error_temp
 from pathlib import Path
 import tempfile
 import hashlib
@@ -757,15 +757,27 @@ def run(
         # MinioClient() gives each thread its own boto3 session/connection pool.
         # Bucket/prefix validation was already done by get_minio_client() at startup.
         thread_s3 = MinioClient()
+        last_error = None
         try:
-            download_genome_files(
-                entry, thread_s3, assembly_tmp, failed_transfers, no_checksum_files,
-                ftp_host=ftp_host,
-                assembly_path=entry if is_assembly_path else None,
-            )
-            return entry, None
-        except Exception as e:
-            return entry, e
+            for attempt in range(1, 4):
+                try:
+                    download_genome_files(
+                        entry, thread_s3, assembly_tmp, failed_transfers, no_checksum_files,
+                        ftp_host=ftp_host,
+                        assembly_path=entry if is_assembly_path else None,
+                    )
+                    return entry, None
+                except error_temp as e:
+                    # 4xx transient errors (425 PASV port collision, 421 timeout, etc.)
+                    last_error = e
+                    if attempt < 3:
+                        logger.warning(
+                            f"  Transient FTP error on attempt {attempt}/3, retrying in 5s: {e}"
+                        )
+                        time.sleep(5)
+                except Exception as e:
+                    return entry, e
+            return entry, last_error
         finally:
             shutil.rmtree(assembly_tmp, ignore_errors=True)
 
