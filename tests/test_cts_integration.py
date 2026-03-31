@@ -4,7 +4,6 @@ Integration tests for CRC64/NVME checksum support.
 Requires a running MinIO instance (provided by CI or local docker).
 """
 
-import json
 import os
 import sys
 import tempfile
