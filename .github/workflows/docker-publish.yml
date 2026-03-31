@@ -28,10 +28,11 @@ jobs:
 
       - name: Tag image
         run: |
-          # Branch tag
+          # Branch tag (sanitize slashes for PR refs like "1/merge")
+          SAFE_REF=$(echo "${GITHUB_REF_NAME}" | sed 's|/|-|g')
           podman tag \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${GITHUB_REF_NAME}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${SAFE_REF}
           # Short SHA tag
           podman tag \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
