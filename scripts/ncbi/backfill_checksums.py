@@ -2,9 +2,10 @@
 """
 Backfill CRC64/NVME checksums on existing NCBI objects in S3/MinIO.
 
-Uses server-side copy to add CRC64/NVME checksums without downloading
-or re-uploading data.  The S3 server reads the object internally and
-computes the checksum during the copy.
+Downloads each object to a temp file, computes CRC64/NVME locally, and
+re-uploads with the checksum.  Existing user metadata (e.g. MD5) is
+preserved.  MinIO does not support computing CRC64/NVME during
+server-side copies, so a full round-trip is required.
 
 Requires MinIO >= 2025-02-07T23-21-09Z for CRC64/NVME support.
 
@@ -13,8 +14,13 @@ Usage:
 """
 
 import argparse
+import base64
 import logging
+import os
 import sys
+import tempfile
+
+from awscrt.checksums import crc64nvme as _crc64nvme
 
 from kbase_transfers import MinioClient
 
@@ -22,6 +28,15 @@ BUCKET = "cdm-lake"
 DEFAULT_PREFIX = "tenant-general-warehouse/kbase/datasets/ncbi/"
 
 logger = logging.getLogger(__name__)
+
+
+def _compute_crc64nvme(file_path):
+    """Compute CRC64/NVME checksum of a file, return base64-encoded string."""
+    crc = 0
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            crc = _crc64nvme(chunk, crc)
+    return base64.b64encode(crc.to_bytes(8, byteorder="big")).decode()
 
 
 def backfill(prefix, dry_run=False, limit=None, bucket=None, client=None):
@@ -61,17 +76,29 @@ def backfill(prefix, dry_run=False, limit=None, bucket=None, client=None):
                 count += 1
             else:
                 try:
-                    # Use REPLACE so S3 treats this as a real change.
-                    # Re-supply existing user metadata to preserve it.
                     existing_metadata = head.get("Metadata", {})
-                    s3.copy_object(
-                        Bucket=bucket,
-                        Key=key,
-                        CopySource={"Bucket": bucket, "Key": key},
-                        ChecksumAlgorithm="CRC64NVME",
-                        MetadataDirective="REPLACE",
-                        Metadata=existing_metadata,
-                    )
+                    content_type = head.get("ContentType", "application/octet-stream")
+
+                    # Download to temp file, compute checksum, re-upload
+                    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                        tmp_path = tmp.name
+                    try:
+                        s3.download_file(bucket, key, tmp_path)
+                        cksum = _compute_crc64nvme(tmp_path)
+                        s3.upload_file(
+                            tmp_path,
+                            bucket,
+                            key,
+                            ExtraArgs={
+                                "Metadata": existing_metadata,
+                                "ContentType": content_type,
+                                "ChecksumAlgorithm": "CRC64NVME",
+                                "ChecksumCRC64NVME": cksum,
+                            },
+                        )
+                    finally:
+                        os.unlink(tmp_path)
+
                     count += 1
                     if count % 100 == 0:
                         logger.info(f"Backfilled {count} objects so far...")
