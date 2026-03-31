@@ -1,8 +1,11 @@
 # MinIO client for loading files into the KBase Lakehouse Object Store
 import boto3
+import logging
 import os
 import json
 from botocore.exceptions import ClientError
+
+logger = logging.getLogger(__name__)
 
 endpoint_url = "http://localhost:9000"
 access_key = "minioadmin"
@@ -62,7 +65,7 @@ class MinioClient:
         Returns {'size': int, 'md5': str|None, 'crc64nvme': str|None}.
         'md5' comes from user-metadata. 'crc64nvme' comes from the S3-native
         checksum (base64-encoded), retrieved via ChecksumMode='ENABLED'.
-        Returns None if the object does not exist or the request fails.
+        Returns None if the object does not exist.
         """
         try:
             response = self.s3.head_object(
@@ -73,8 +76,32 @@ class MinioClient:
                 'md5': response.get('Metadata', {}).get('md5'),
                 'crc64nvme': response.get('ChecksumCRC64NVME'),
             }
-        except Exception:
-            return None
+        except ClientError as e:
+            error_code = e.response.get('Error', {}).get('Code', '')
+            if error_code in ('404', 'NoSuchKey'):
+                return None
+            # ChecksumMode may not be supported; retry without it
+            logger.warning(
+                "head_object with ChecksumMode failed for %s/%s (%s), retrying without",
+                bucket_name, object_name, error_code,
+            )
+            try:
+                response = self.s3.head_object(
+                    Bucket=bucket_name, Key=object_name
+                )
+                return {
+                    'size': response.get('ContentLength'),
+                    'md5': response.get('Metadata', {}).get('md5'),
+                    'crc64nvme': None,
+                }
+            except ClientError as e2:
+                error_code2 = e2.response.get('Error', {}).get('Code', '')
+                if error_code2 in ('404', 'NoSuchKey'):
+                    return None
+                logger.error(
+                    "head_object failed for %s/%s: %s", bucket_name, object_name, e2
+                )
+                raise
 
     def list_objects(self, bucket_name, prefix=''):
         response = self.s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix)

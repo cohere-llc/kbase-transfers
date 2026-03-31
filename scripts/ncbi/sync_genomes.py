@@ -50,26 +50,39 @@ logger = logging.getLogger(__name__)
 # ── Assembly summary parsing ───────────────────────────────────────────────
 
 def download_assembly_summary(ftp_host=FTP_HOST):
-    """Download assembly_summary_refseq.txt from NCBI FTP.
+    """Download assembly_summary_refseq.txt from NCBI FTP to a temp file.
 
-    Returns the raw text content as a string.
+    Returns the path to the temp file. Caller is responsible for cleanup.
     """
     logger.info("Downloading assembly_summary_refseq.txt from NCBI FTP ...")
     ftp = FTP(ftp_host)
     ftp.login()
     _set_ftp_keepalive(ftp)
 
-    lines = []
-    ftp.retrlines(f"RETR {SUMMARY_URL_FTP}", lambda line: lines.append(line))
-    ftp.quit()
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".tsv", prefix="assembly_summary_", delete=False
+    )
+    line_count = 0
+    def _write_line(line):
+        nonlocal line_count
+        tmp.write(line + "\n")
+        line_count += 1
 
-    content = "\n".join(lines)
-    logger.info(f"Downloaded {len(lines)} lines from assembly summary")
-    return content
+    try:
+        ftp.retrlines(f"RETR {SUMMARY_URL_FTP}", _write_line)
+    finally:
+        tmp.close()
+        ftp.quit()
+
+    logger.info(f"Downloaded {line_count} lines from assembly summary")
+    return tmp.name
 
 
-def parse_assembly_summary(content):
-    """Parse assembly_summary_refseq.txt into a list of dicts.
+def parse_assembly_summary(source):
+    """Parse assembly_summary_refseq.txt into a dict of assemblies.
+
+    Args:
+        source: file path (str/Path) or iterable of lines.
 
     Columns of interest (0-indexed):
       0:  assembly_accession      (e.g. GCF_000001215.4)
@@ -80,29 +93,40 @@ def parse_assembly_summary(content):
         dict mapping accession -> {status, ftp_path, assembly_dir}
     """
     assemblies = {}
-    reader = csv.reader(
-        (line for line in content.splitlines() if not line.startswith("#")),
-        delimiter="\t",
-    )
-    for row in reader:
-        if len(row) < 20:
-            continue
-        accession = row[0]
-        status = row[10]               # latest / replaced / suppressed
-        ftp_path = row[19]
 
-        if ftp_path == "na":
-            continue
+    def _parse_lines(lines):
+        reader = csv.reader(
+            (line.rstrip("\n") for line in lines if not line.startswith("#")),
+            delimiter="\t",
+        )
+        for row in reader:
+            if len(row) < 20:
+                continue
+            accession = row[0]
+            status = row[10]               # latest / replaced / suppressed
+            ftp_path = row[19]
 
-        # Derive the assembly directory name from the FTP path
-        # e.g. .../GCF_000001215.4_Release_6_plus_ISO1_MT
-        assembly_dir = ftp_path.rstrip("/").split("/")[-1]
+            if ftp_path == "na":
+                continue
 
-        assemblies[accession] = {
-            "status": status,
-            "ftp_path": ftp_path,
-            "assembly_dir": assembly_dir,
-        }
+            # Derive the assembly directory name from the FTP path
+            # e.g. .../GCF_000001215.4_Release_6_plus_ISO1_MT
+            assembly_dir = ftp_path.rstrip("/").split("/")[-1]
+
+            assemblies[accession] = {
+                "status": status,
+                "ftp_path": ftp_path,
+                "assembly_dir": assembly_dir,
+            }
+
+    if isinstance(source, (str, Path)) and os.path.isfile(str(source)):
+        with open(source) as f:
+            _parse_lines(f)
+    else:
+        # Accept an iterable of lines (for testing) or a string blob
+        if isinstance(source, str):
+            source = source.splitlines(keepends=True)
+        _parse_lines(source)
 
     logger.info(f"Parsed {len(assemblies)} assemblies from summary")
     return assemblies
@@ -149,8 +173,11 @@ def sync(
        skipping files that are already up to date
     """
     # 1. Download & parse assembly summary
-    summary_content = download_assembly_summary(ftp_host=ftp_host)
-    ncbi_assemblies = parse_assembly_summary(summary_content)
+    summary_file = download_assembly_summary(ftp_host=ftp_host)
+    try:
+        ncbi_assemblies = parse_assembly_summary(summary_file)
+    finally:
+        os.unlink(summary_file)
 
     # 2. Get FTP paths for latest assemblies
     assembly_paths = get_latest_assembly_paths(ncbi_assemblies, ftp_host=ftp_host)
