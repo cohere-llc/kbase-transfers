@@ -200,3 +200,121 @@ The contents of my folder`cdm-lake:tenant-general-warehouse/kbase/datasets/ncbi/
    |- GCF/000/007/865/GCF_000007865.1_quux/
    |- GCF/000/008/205/GCF_000008205.1_qux/
    ```
+## Docker-based Sync
+
+The `sync_genomes.py` script can be run in a container, which is how it is intended to be run in production via the CDM Task Service. The container uses NCBI's `assembly_summary_refseq.txt` to discover assemblies (instead of traversing FTP directories) and compares MD5 checksums against S3 object metadata to skip unchanged files.
+
+### Build the image
+
+From the repository root:
+
+```bash
+podman build -t ncbi-sync:latest .
+```
+
+### Run against a local MinIO container
+
+**1. Create a container network and start MinIO:**
+
+```bash
+podman network create sync-net
+
+podman run -d \
+  --name minio \
+  --network sync-net \
+  -p 9000:9000 -p 9001:9001 \
+  -e "MINIO_ROOT_USER=minioadmin" \
+  -e "MINIO_ROOT_PASSWORD=minioadmin" \
+  docker.io/minio/minio:RELEASE.2025-02-28T09-55-16Z \
+  server /data --console-address ":9001"
+```
+
+**2. Create the `cdm-lake` bucket:**
+
+```bash
+podman run --rm --network sync-net \
+  --entrypoint sh docker.io/minio/mc:latest \
+  -c "mc alias set local http://minio:9000 minioadmin minioadmin && mc mb local/cdm-lake"
+```
+
+**3. Run a dry-run to see what would be synced:**
+
+```bash
+podman run --rm \
+  --network sync-net \
+  -e MINIO_ENDPOINT_URL=http://minio:9000 \
+  -e MINIO_ACCESS_KEY=minioadmin \
+  -e MINIO_SECRET_KEY=minioadmin \
+  ncbi-sync:latest \
+  --dry-run --limit 10
+```
+
+**4. Run a real sync (small limit for testing):**
+
+```bash
+podman run --rm \
+  --network sync-net \
+  -e MINIO_ENDPOINT_URL=http://minio:9000 \
+  -e MINIO_ACCESS_KEY=minioadmin \
+  -e MINIO_SECRET_KEY=minioadmin \
+  ncbi-sync:latest \
+  --limit 2 --threads 2
+```
+
+**5. Verify files landed with CRC64/NVME checksums:**
+
+```bash
+podman run --rm --network sync-net \
+  --entrypoint sh docker.io/minio/mc:latest \
+  -c "
+    mc alias set local http://minio:9000 minioadmin minioadmin &&
+    mc ls --recursive local/cdm-lake/tenant-general-warehouse/kbase/datasets/ncbi/raw_data/ | head -20
+  "
+
+# Check checksums on a specific file (pick any path from the listing above):
+podman run --rm --network sync-net \
+  --entrypoint sh docker.io/minio/mc:latest \
+  -c "
+    mc alias set local http://minio:9000 minioadmin minioadmin &&
+    mc stat local/cdm-lake/tenant-general-warehouse/kbase/datasets/ncbi/raw_data/GCF/000/001/215/GCF_000001215.4_Release_6_plus_ISO1_MT/md5checksums.txt
+  "
+```
+
+**6. Re-run to verify idempotency (files should be skipped):**
+
+```bash
+podman run --rm \
+  --network sync-net \
+  -e MINIO_ENDPOINT_URL=http://minio:9000 \
+  -e MINIO_ACCESS_KEY=minioadmin \
+  -e MINIO_SECRET_KEY=minioadmin \
+  ncbi-sync:latest \
+  --limit 2 --threads 2
+```
+
+You should see "Checksum verified" messages indicating files were skipped.
+
+**7. Cleanup:**
+
+```bash
+podman stop minio && podman rm minio
+podman network rm sync-net
+```
+
+### Sync CLI options
+
+| Option | Description |
+|--------|-------------|
+| `--dry-run` | Show what would be synced without making changes |
+| `--limit N` | Limit to first N assemblies (useful for testing) |
+| `--threads N` | Parallel download threads (default: 4) |
+| `--ftp-host HOST` | FTP hostname (default: `ftp.ncbi.nlm.nih.gov`) |
+
+### Environment variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MINIO_ENDPOINT_URL` | S3/MinIO server URL | `http://localhost:9000` |
+| `MINIO_ACCESS_KEY` | Access key | `minioadmin` |
+| `MINIO_SECRET_KEY` | Secret key | `minioadmin` |
+| `MINIO_BUCKET` | Target bucket | `cdm-lake` |

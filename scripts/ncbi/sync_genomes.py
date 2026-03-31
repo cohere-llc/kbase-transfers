@@ -277,6 +277,11 @@ Examples:
     args = parser.parse_args()
 
     log_file = setup_logging(module_name=__name__)
+    # Also configure download_genomes logger so its messages (e.g. "Checksum verified") are visible.
+    # When imported via `from download_genomes import ...`, __name__ is "download_genomes"
+    # (not "scripts.ncbi.download_genomes"), so use the actual module's __name__.
+    import download_genomes as _dg_mod
+    setup_logging(log_file=log_file, module_name=_dg_mod.__name__)
     logger.info(f"Logging to: {log_file}")
 
     sync(
