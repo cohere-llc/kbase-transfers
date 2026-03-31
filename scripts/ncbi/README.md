@@ -318,3 +318,4 @@ podman network rm sync-net
 | `MINIO_ACCESS_KEY` | Access key | `minioadmin` |
 | `MINIO_SECRET_KEY` | Secret key | `minioadmin` |
 | `MINIO_BUCKET` | Target bucket | `cdm-lake` |
+| `MINIO_PATH_PREFIX` | Object key prefix within the bucket | (none) |
