@@ -314,67 +314,6 @@ def create_frictionless_descriptor(assembly_dir, accession_full, downloaded_file
     return descriptor
 
 
-def find_assembly_directories_in_prefix(ftp, prefix_path, start_from=None, limit=None):
-    """
-    Recursively find all assembly directories under a given prefix.
-    Returns list of full paths to assembly directories.
-    e.g., /genomes/all/GCF/000/001/215/GCF_000001215.2_Release_5/
-
-    Args:
-        ftp: Connected FTP instance.
-        prefix_path: Base FTP path to search under.
-        start_from: If set, skip top-level subdirectories whose names sort
-                    before this value (alphanumeric comparison). Only applied
-                    at the first level of subdirectories under prefix_path.
-        limit: If set, stop collecting once this many assembly dirs are found.
-    """
-    assembly_pattern = re.compile(r'^GC[AF]_\d{9}\.\d+_.*')
-    assembly_dirs = []
-
-    def traverse_directory(path, skip_before=None):
-        if limit and len(assembly_dirs) >= limit:
-            return
-        logger.debug(f"Traversing: {path}")
-        try:
-            ftp.cwd(path)
-            items = []
-            ftp.retrlines('LIST', lambda x: items.append(x))
-
-            for line in items:
-                if limit and len(assembly_dirs) >= limit:
-                    break
-
-                parts = line.split()
-                if len(parts) < 9:
-                    continue
-
-                name = parts[-1]
-                is_dir = line.startswith('d')
-
-                if not is_dir:
-                    continue
-
-                # At the top level, skip subdirectories that sort before start_from
-                if skip_before is not None and name < skip_before:
-                    logger.debug(f"  Skipping {name} (before start_from={skip_before})")
-                    continue
-
-                # Check if this is an assembly directory
-                if assembly_pattern.match(name):
-                    full_path = f"{path}{name}/"
-                    assembly_dirs.append(full_path)
-                    logger.debug(f"  Found assembly: {full_path}")
-                else:
-                    # Recurse into subdirectory (no skip_before for deeper levels)
-                    traverse_directory(f"{path}{name}/")
-
-        except Exception as e:
-            logger.warning(f"Error traversing {path}: {e}")
-
-    traverse_directory(prefix_path, skip_before=start_from)
-    return assembly_dirs
-
-
 def list_ftp_subdirectories(ftp, path, start_from=None):
     """
     List direct subdirectories of an FTP path, optionally filtering to those
@@ -401,6 +340,155 @@ def list_ftp_subdirectories(ftp, path, start_from=None):
     except Exception as e:
         logger.error(f"Error listing subdirectories of {path}: {e}")
         return []
+
+
+def find_assembly_directories_parallel(
+    ftp_host, prefix_path, start_from=None, limit=None, scan_threads=4
+):
+    """
+    Find all assembly directories under a prefix using parallel FTP connections.
+
+    Lists immediate subdirectories of *prefix_path* on a single connection,
+    then dispatches recursive DFS traversal of each subtree to a pool of
+    *scan_threads* workers.  Each worker maintains its own FTP connection
+    via thread-local storage and reuses it across subtrees, so only
+    *scan_threads* connections are active at any time.
+
+    Args:
+        ftp_host:     FTP hostname.
+        prefix_path:  Base FTP path to search under (must end with ``/``).
+        start_from:   Skip top-level subdirectories that sort before this
+                      value (alphanumeric comparison).
+        limit:        Stop collecting once this many assembly dirs are found.
+        scan_threads: Number of parallel FTP connections for traversal.
+
+    Returns:
+        List of full FTP paths to assembly directories.
+    """
+    assembly_pattern = re.compile(r'^GC[AF]_\d{9}\.\d+_.*')
+    results = []
+    results_lock = threading.Lock()
+    limit_event = threading.Event()
+
+    _local = threading.local()
+
+    def _get_ftp():
+        """Get or create a thread-local FTP connection."""
+        ftp = getattr(_local, 'ftp', None)
+        if ftp is None:
+            ftp = FTP(ftp_host)
+            ftp.login()
+            _set_ftp_keepalive(ftp)
+            _local.ftp = ftp
+        return ftp
+
+    def _reset_ftp():
+        """Tear down and recreate the thread-local FTP connection."""
+        old = getattr(_local, 'ftp', None)
+        if old:
+            try:
+                old.quit()
+            except Exception:
+                pass
+        _local.ftp = None
+        return _get_ftp()
+
+    def _recursive_list(path, out):
+        """DFS listing using the thread-local FTP connection."""
+        if limit_event.is_set():
+            return
+        logger.debug(f"Traversing: {path}")
+        for attempt in (1, 2):
+            try:
+                ftp = _get_ftp() if attempt == 1 else _reset_ftp()
+                ftp.cwd(path)
+                items = []
+                ftp.retrlines('LIST', lambda x: items.append(x))
+                break
+            except Exception as e:
+                if attempt == 2:
+                    logger.warning(f"Error traversing {path}: {e}")
+                    return
+        for line in items:
+            if limit_event.is_set():
+                break
+            parts = line.split()
+            if len(parts) < 9 or not line.startswith('d'):
+                continue
+            name = parts[-1]
+            if assembly_pattern.match(name):
+                out.append(f"{path}{name}/")
+                logger.debug(f"  Found assembly: {path}{name}/")
+            else:
+                _recursive_list(f"{path}{name}/", out)
+
+    def _traverse_subtree(subtree_path):
+        """Traverse a subtree using the thread-local FTP connection."""
+        if limit_event.is_set():
+            return []
+        local_results = []
+        _recursive_list(subtree_path, local_results)
+        return local_results
+
+    # Phase 1: list immediate children of prefix_path (single connection)
+    ftp = FTP(ftp_host)
+    ftp.login()
+    _set_ftp_keepalive(ftp)
+    try:
+        top_children = list_ftp_subdirectories(ftp, prefix_path, start_from=start_from)
+    finally:
+        ftp.quit()
+
+    if not top_children:
+        return []
+
+    # Separate assemblies already at this level from dirs to explore
+    initial_subdirs = []
+    for name in top_children:
+        if assembly_pattern.match(name):
+            results.append(f"{prefix_path}{name}/")
+        else:
+            initial_subdirs.append(name)
+
+    if limit and len(results) >= limit:
+        return results[:limit]
+
+    if not initial_subdirs:
+        return results
+
+    effective_threads = min(scan_threads, len(initial_subdirs))
+    logger.info(
+        f"Scanning {len(initial_subdirs)} subdirectories with "
+        f"{effective_threads} parallel FTP connections"
+    )
+
+    # Phase 2: parallel DFS — each subtree is traversed depth-first on
+    # whichever worker picks it up.  Thread-local FTP connections are
+    # reused across subtrees processed by the same worker.
+    with ThreadPoolExecutor(max_workers=effective_threads) as executor:
+        subtree_paths = [f"{prefix_path}{name}/" for name in initial_subdirs]
+        futures = {
+            executor.submit(_traverse_subtree, p): p for p in subtree_paths
+        }
+        for future in as_completed(futures):
+            path = futures[future]
+            try:
+                subtree_results = future.result()
+                with results_lock:
+                    results.extend(subtree_results)
+                    if subtree_results:
+                        logger.info(
+                            f"  Scanned {path}: {len(subtree_results)} assemblies"
+                        )
+                    if limit and len(results) >= limit:
+                        limit_event.set()
+                        for f in futures:
+                            f.cancel()
+                        break
+            except Exception as e:
+                logger.error(f"  Error scanning {path}: {e}")
+
+    return results[:limit] if limit else results
 
 
 def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_checksum_files, ftp_host='ftp.ncbi.nlm.nih.gov', assembly_path=None):
@@ -735,7 +823,8 @@ def run(
         output_list: Path to a file where discovered accession IDs will be
                      written incrementally (only valid with ``prefix``).
         ftp_host:    NCBI FTP hostname (default: ``'ftp.ncbi.nlm.nih.gov'``).
-        threads:     Number of parallel download threads (default: ``1``).
+        threads:     Number of parallel threads for both FTP directory
+                     scanning and file downloads (default: ``1``).
         limit:       Stop after this many assemblies have been attempted
                      (handy for smoke-testing).
     """
@@ -859,14 +948,10 @@ def run(
                     remaining = (limit - success_count - len(failed)) if limit else None
 
                     logger.info(f"Scanning subdir: {subdir_path}")
-                    ftp = FTP(ftp_host)
-                    ftp.login()
-                    try:
-                        subdir_paths = find_assembly_directories_in_prefix(
-                            ftp, subdir_path, limit=remaining
-                        )
-                    finally:
-                        ftp.quit()
+                    subdir_paths = find_assembly_directories_parallel(
+                        ftp_host, subdir_path,
+                        scan_threads=threads, limit=remaining,
+                    )
 
                     if not subdir_paths:
                         logger.debug(f"No assemblies found under {subdir_path}")
@@ -898,14 +983,10 @@ def run(
 
             else:
                 # Non-iterative mode: build the full list first, then process.
-                ftp = FTP(ftp_host)
-                ftp.login()
-                try:
-                    assembly_paths = find_assembly_directories_in_prefix(
-                        ftp, ftp_path, limit=limit
-                    )
-                finally:
-                    ftp.quit()
+                assembly_paths = find_assembly_directories_parallel(
+                    ftp_host, ftp_path,
+                    scan_threads=threads, limit=limit,
+                )
 
                 logger.info(f"Found {len(assembly_paths)} assembly directories")
 
@@ -978,8 +1059,8 @@ Examples:
                              '(e.g., --prefix GCF --start-from 003 processes GCF/003/, GCF/004/, ...)')
     parser.add_argument('--output-list', help='Output file to save list of assemblies found (use with --prefix)')
     parser.add_argument('--ftp-host', default='ftp.ncbi.nlm.nih.gov', help='FTP host (default: ftp.ncbi.nlm.nih.gov)')
-    parser.add_argument('--threads', type=int, default=1, metavar='N',
-                        help='Number of parallel download threads (default: 1)')
+    parser.add_argument('--threads', type=int, default=4, metavar='N',
+                        help='Number of parallel threads for scanning and downloading (default: 4)')
     parser.add_argument('--limit', type=int, metavar='N', help='Limit processing to first N accessions (for testing)')
 
     args = parser.parse_args()
