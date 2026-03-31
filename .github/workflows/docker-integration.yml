@@ -15,11 +15,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Create container network
-        run: podman network create test-net
+        run: docker network create test-net
 
       - name: Start MinIO
         run: |
-          podman run -d \
+          docker run -d \
             --name minio \
             --network test-net \
             -p 9000:9000 \
@@ -42,7 +42,7 @@ jobs:
 
       - name: Create S3 bucket
         run: |
-          podman run --rm --network test-net \
+          docker run --rm --network test-net \
             --entrypoint sh \
             minio/mc:latest \
             -c "
@@ -51,11 +51,11 @@ jobs:
             "
 
       - name: Build sync container image
-        run: podman build -t ncbi-sync:test .
+        run: docker build -t ncbi-sync:test .
 
       - name: Run sync (dry-run smoke test)
         run: |
-          podman run --rm \
+          docker run --rm \
             --network test-net \
             -e MINIO_ENDPOINT_URL=http://minio:9000 \
             -e MINIO_ACCESS_KEY=minioadmin \
@@ -65,7 +65,7 @@ jobs:
 
       - name: Run sync (real transfer, small limit)
         run: |
-          podman run --rm \
+          docker run --rm \
             --network test-net \
             -e MINIO_ENDPOINT_URL=http://minio:9000 \
             -e MINIO_ACCESS_KEY=minioadmin \
@@ -75,10 +75,11 @@ jobs:
 
       - name: Verify files in MinIO
         run: |
-          podman run --rm --network test-net \
+          docker run --rm --network test-net \
             --entrypoint sh \
             minio/mc:latest \
             -c "
+              apk add --no-cache gawk &&
               mc alias set local http://minio:9000 minioadmin minioadmin &&
               echo '=== Objects in cdm-lake ===' &&
               mc ls --recursive local/cdm-lake/tenant-general-warehouse/kbase/datasets/ncbi/raw_data/ | head -30 &&
@@ -95,7 +96,7 @@ jobs:
 
       - name: Run sync again (idempotency check)
         run: |
-          podman run --rm \
+          docker run --rm \
             --network test-net \
             -e MINIO_ENDPOINT_URL=http://minio:9000 \
             -e MINIO_ACCESS_KEY=minioadmin \
@@ -113,6 +114,6 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          podman stop minio || true
-          podman rm minio || true
-          podman network rm test-net || true
+          docker stop minio || true
+          docker rm minio || true
+          docker network rm test-net || true

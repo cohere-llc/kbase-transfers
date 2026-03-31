@@ -15,6 +15,7 @@ from download_genomes import compute_md5, compute_crc64nvme, build_accession_pat
 
 import base64
 import hashlib
+import os
 import tempfile
 
 
@@ -116,25 +117,37 @@ class TestChecksums(unittest.TestCase):
         with tempfile.NamedTemporaryFile(delete=False) as f:
             f.write(b"Hello, World!")
             f.flush()
-            md5 = compute_md5(f.name)
-        self.assertEqual(md5, hashlib.md5(b"Hello, World!").hexdigest())
+            tmp_path = f.name
+        try:
+            md5 = compute_md5(tmp_path)
+            self.assertEqual(md5, hashlib.md5(b"Hello, World!").hexdigest())
+        finally:
+            os.remove(tmp_path)
 
     def test_compute_crc64nvme(self):
         with tempfile.NamedTemporaryFile(delete=False) as f:
             f.write(b"Hello, World!")
             f.flush()
-            crc = compute_crc64nvme(f.name)
-        # Verify it's a base64-encoded 8-byte value
-        decoded = base64.b64decode(crc)
-        self.assertEqual(len(decoded), 8)
+            tmp_path = f.name
+        try:
+            crc = compute_crc64nvme(tmp_path)
+            # Verify it's a base64-encoded 8-byte value
+            decoded = base64.b64decode(crc)
+            self.assertEqual(len(decoded), 8)
+        finally:
+            os.remove(tmp_path)
 
     def test_crc64nvme_deterministic(self):
         with tempfile.NamedTemporaryFile(delete=False) as f:
             f.write(b"test data for checksum")
             f.flush()
-            crc1 = compute_crc64nvme(f.name)
-            crc2 = compute_crc64nvme(f.name)
-        self.assertEqual(crc1, crc2)
+            tmp_path = f.name
+        try:
+            crc1 = compute_crc64nvme(tmp_path)
+            crc2 = compute_crc64nvme(tmp_path)
+            self.assertEqual(crc1, crc2)
+        finally:
+            os.remove(tmp_path)
 
 
 class TestBuildAccessionPath(unittest.TestCase):

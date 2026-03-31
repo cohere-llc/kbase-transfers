@@ -35,24 +35,25 @@ class TestCRC64NVMEIntegration(unittest.TestCase):
             f.flush()
             tmp_path = f.name
 
-        object_name = "test_crc64nvme.txt"
-        expected_crc = compute_crc64nvme(tmp_path)
+        try:
+            object_name = "test_crc64nvme.txt"
+            expected_crc = compute_crc64nvme(tmp_path)
 
-        self.client.upload_file(
-            self.test_bucket,
-            object_name,
-            tmp_path,
-            metadata={"md5": compute_md5(tmp_path)},
-            checksum_algorithm="CRC64NVME",
-        )
+            self.client.upload_file(
+                self.test_bucket,
+                object_name,
+                tmp_path,
+                metadata={"md5": compute_md5(tmp_path)},
+                checksum_algorithm="CRC64NVME",
+            )
 
-        info = self.client.stat_object(self.test_bucket, object_name)
-        self.assertIsNotNone(info)
-        self.assertIsNotNone(info.get("crc64nvme"), "CRC64NVME checksum should be stored")
-        self.assertEqual(info["crc64nvme"], expected_crc)
-        self.assertIsNotNone(info.get("md5"), "MD5 metadata should be stored")
-
-        os.remove(tmp_path)
+            info = self.client.stat_object(self.test_bucket, object_name)
+            self.assertIsNotNone(info)
+            self.assertIsNotNone(info.get("crc64nvme"), "CRC64NVME checksum should be stored")
+            self.assertEqual(info["crc64nvme"], expected_crc)
+            self.assertIsNotNone(info.get("md5"), "MD5 metadata should be stored")
+        finally:
+            os.remove(tmp_path)
 
     def test_put_json_with_crc64nvme(self):
         """Upload JSON with CRC64/NVME and verify."""
@@ -77,14 +78,15 @@ class TestCRC64NVMEIntegration(unittest.TestCase):
             f.flush()
             tmp_path = f.name
 
-        object_name = "test_no_crc.txt"
-        self.client.upload_file(self.test_bucket, object_name, tmp_path)
+        try:
+            object_name = "test_no_crc.txt"
+            self.client.upload_file(self.test_bucket, object_name, tmp_path)
 
-        info = self.client.stat_object(self.test_bucket, object_name)
-        self.assertIsNotNone(info)
-        self.assertIsNone(info.get("crc64nvme"))
-
-        os.remove(tmp_path)
+            info = self.client.stat_object(self.test_bucket, object_name)
+            self.assertIsNotNone(info)
+            self.assertIsNone(info.get("crc64nvme"))
+        finally:
+            os.remove(tmp_path)
 
     @classmethod
     def tearDownClass(cls):
