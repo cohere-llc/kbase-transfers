@@ -17,7 +17,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       
       - name: Start MinIO
         run: |
@@ -27,7 +27,7 @@ jobs:
             -p 9001:9001 \
             -e "MINIO_ROOT_USER=minioadmin" \
             -e "MINIO_ROOT_PASSWORD=minioadmin" \
-            docker.io/minio/minio:latest \
+            docker.io/minio/minio:RELEASE.2025-02-28T09-55-16Z \
             server /data --console-address ":9001"
       
       - name: Install uv

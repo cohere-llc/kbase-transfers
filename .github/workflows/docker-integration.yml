@@ -1,0 +1,118 @@
+name: Container Integration Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  container-sync-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create container network
+        run: podman network create test-net
+
+      - name: Start MinIO
+        run: |
+          podman run -d \
+            --name minio \
+            --network test-net \
+            -p 9000:9000 \
+            -e "MINIO_ROOT_USER=minioadmin" \
+            -e "MINIO_ROOT_PASSWORD=minioadmin" \
+            minio/minio:RELEASE.2025-02-28T09-55-16Z \
+            server /data
+
+      - name: Wait for MinIO to be ready
+        run: |
+          for i in {1..30}; do
+            if curl -f http://localhost:9000/minio/health/live 2>/dev/null; then
+              echo "MinIO is ready"
+              break
+            fi
+            echo "Waiting for MinIO... ($i/30)"
+            sleep 2
+          done
+          curl -f http://localhost:9000/minio/health/live || exit 1
+
+      - name: Create S3 bucket
+        run: |
+          podman run --rm --network test-net \
+            --entrypoint sh \
+            minio/mc:latest \
+            -c "
+              mc alias set local http://minio:9000 minioadmin minioadmin &&
+              mc mb local/cdm-lake
+            "
+
+      - name: Build sync container image
+        run: podman build -t ncbi-sync:test .
+
+      - name: Run sync (dry-run smoke test)
+        run: |
+          podman run --rm \
+            --network test-net \
+            -e MINIO_ENDPOINT_URL=http://minio:9000 \
+            -e MINIO_ACCESS_KEY=minioadmin \
+            -e MINIO_SECRET_KEY=minioadmin \
+            ncbi-sync:test \
+            --dry-run --limit 5
+
+      - name: Run sync (real transfer, small limit)
+        run: |
+          podman run --rm \
+            --network test-net \
+            -e MINIO_ENDPOINT_URL=http://minio:9000 \
+            -e MINIO_ACCESS_KEY=minioadmin \
+            -e MINIO_SECRET_KEY=minioadmin \
+            ncbi-sync:test \
+            --limit 2 --threads 2
+
+      - name: Verify files in MinIO
+        run: |
+          podman run --rm --network test-net \
+            --entrypoint sh \
+            minio/mc:latest \
+            -c "
+              mc alias set local http://minio:9000 minioadmin minioadmin &&
+              echo '=== Objects in cdm-lake ===' &&
+              mc ls --recursive local/cdm-lake/tenant-general-warehouse/kbase/datasets/ncbi/raw_data/ | head -30 &&
+              COUNT=\$(mc ls --recursive local/cdm-lake/tenant-general-warehouse/kbase/datasets/ncbi/raw_data/ | wc -l) &&
+              echo \"Total objects: \$COUNT\" &&
+              if [ \"\$COUNT\" -lt 1 ]; then
+                echo 'ERROR: No files were synced to MinIO'
+                exit 1
+              fi &&
+              echo '=== Checking CRC64NVME checksums ===' &&
+              FIRST_OBJ=\$(mc ls --recursive local/cdm-lake/tenant-general-warehouse/kbase/datasets/ncbi/raw_data/ | head -1 | awk '{print \$NF}') &&
+              mc stat local/cdm-lake/tenant-general-warehouse/kbase/datasets/ncbi/raw_data/\$FIRST_OBJ
+            "
+
+      - name: Run sync again (idempotency check)
+        run: |
+          podman run --rm \
+            --network test-net \
+            -e MINIO_ENDPOINT_URL=http://minio:9000 \
+            -e MINIO_ACCESS_KEY=minioadmin \
+            -e MINIO_SECRET_KEY=minioadmin \
+            ncbi-sync:test \
+            --limit 2 --threads 2 2>&1 | tee sync-rerun.log
+          # All files should be skipped via MD5 metadata match
+          if grep -q "Checksum verified" sync-rerun.log; then
+            echo "OK: Files correctly skipped on re-run"
+          else
+            echo "ERROR: Expected files to be skipped on idempotent re-run"
+            exit 1
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: |
+          podman stop minio || true
+          podman rm minio || true
+          podman network rm test-net || true
