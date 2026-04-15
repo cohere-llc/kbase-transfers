@@ -1,10 +1,15 @@
 # Test for the MinIO client using a local MinIO server
 import unittest
-from kbase_transfers import MinioClient
 import os
 import tempfile
 import json
 
+import pytest
+
+from kbase_transfers import MinioClient
+
+
+@pytest.mark.integration
 class TestMinioClient(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

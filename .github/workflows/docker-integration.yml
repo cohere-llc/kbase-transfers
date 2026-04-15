@@ -1,0 +1,98 @@
+name: Container Integration Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  container-sync-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create container network
+        run: docker network create test-net
+
+      - name: Start MinIO
+        run: |
+          docker run -d \
+            --name minio \
+            --network test-net \
+            -p 9000:9000 \
+            -e "MINIO_ROOT_USER=minioadmin" \
+            -e "MINIO_ROOT_PASSWORD=minioadmin" \
+            minio/minio:RELEASE.2025-02-28T09-55-16Z \
+            server /data
+
+      - name: Wait for MinIO to be ready
+        run: |
+          for i in {1..30}; do
+            if curl -f http://localhost:9000/minio/health/live 2>/dev/null; then
+              echo "MinIO is ready"
+              break
+            fi
+            echo "Waiting for MinIO... ($i/30)"
+            sleep 2
+          done
+          curl -f http://localhost:9000/minio/health/live || exit 1
+
+      - name: Install MinIO client
+        run: |
+          curl -sL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
+          chmod +x /usr/local/bin/mc
+          mc alias set local http://localhost:9000 minioadmin minioadmin
+
+      - name: Create S3 bucket
+        run: mc mb local/cdm-lake
+
+      - name: Build container image
+        run: docker build -t ncbi-sync:test .
+
+      - name: Create test manifest
+        run: |
+          # Use a known small assembly for testing
+          echo "/genomes/all/GCF/000/001/215/GCF_000001215.4_Release_6_plus_ISO1_MT/" > /tmp/test_manifest.txt
+
+      - name: Run container download (small test)
+        run: |
+          mkdir -p /tmp/container_output
+          docker run --rm \
+            --network test-net \
+            -v /tmp/test_manifest.txt:/job_input_dir/transfer_manifest.txt:ro \
+            -v /tmp/container_output:/job_output_dir \
+            ncbi-sync:test \
+            --manifest /job_input_dir/transfer_manifest.txt \
+            --output-dir /job_output_dir/ \
+            --threads 2 \
+            --limit 1
+
+      - name: Verify output files
+        run: |
+          echo '=== Files in container output ==='
+          find /tmp/container_output -type f | head -30
+          COUNT=$(find /tmp/container_output -name '*.fna.gz' -o -name '*.gff.gz' | wc -l)
+          echo "Genome files found: $COUNT"
+          if [ "$COUNT" -lt 1 ]; then
+            echo 'ERROR: No genome files were downloaded'
+            exit 1
+          fi
+          echo '=== Checking CRC64/NVME sidecar files ==='
+          CRC_COUNT=$(find /tmp/container_output -name '*.crc64nvme' | wc -l)
+          echo "CRC64/NVME sidecar files: $CRC_COUNT"
+          if [ "$CRC_COUNT" -lt 1 ]; then
+            echo 'ERROR: No CRC64/NVME sidecar files found'
+            exit 1
+          fi
+          echo '=== Download report ==='
+          cat /tmp/container_output/download_report.json
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker stop minio || true
+          docker rm minio || true
+          docker network rm test-net || true

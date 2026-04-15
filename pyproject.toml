@@ -13,7 +13,8 @@ authors = [
     {name = "KBase Team"}
 ]
 dependencies = [
-    "boto3>=1.26.0",
+    "boto3>=1.36.0",
+    "awscrt>=0.23.4",
     "pandas>=1.5.0",
     "openpyxl>=3.0.0",
     "requests>=2.28.0",
@@ -41,3 +42,6 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+markers = [
+    "integration: tests requiring external services (MinIO, network)",
+]

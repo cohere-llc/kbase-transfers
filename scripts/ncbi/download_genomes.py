@@ -14,18 +14,20 @@ from ftplib import FTP, error_temp
 from pathlib import Path
 import tempfile
 import hashlib
+import base64
 import logging
 import argparse
 import socket
 import time
 from datetime import datetime
 
+from awscrt.checksums import crc64nvme as _crc64nvme
 from frictionless import Package
 
 from kbase_transfers import MinioClient
 
-minio_bucket = "cdm-lake"
-minio_path_prefix = "tenant-general-warehouse/kbase/datasets/ncbi/"
+minio_bucket = os.environ.get("MINIO_BUCKET", "cdm-lake")
+minio_path_prefix = os.environ.get("MINIO_PATH_PREFIX", "tenant-general-warehouse/kbase/datasets/ncbi/")
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -219,6 +221,19 @@ def compute_md5(file_path):
         for chunk in iter(lambda: f.read(1 << 20), b""):
             md5_hash.update(chunk)
     return md5_hash.hexdigest()
+
+
+def compute_crc64nvme(file_path):
+    """Compute CRC64/NVME checksum of a file.
+
+    Returns the base64-encoded string used by S3-native checksums.
+    Uses 1 MiB read chunks for performance.
+    """
+    crc = 0
+    with open(file_path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            crc = _crc64nvme(chunk, crc)
+    return base64.b64encode(crc.to_bytes(8, byteorder='big')).decode()
 
 
 def parse_md5checksums(content):
@@ -563,7 +578,8 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
             s3_client.upload_file(
                 minio_bucket,
                 s3_path + 'md5checksums.txt',
-                str(md5_local_file)
+                str(md5_local_file),
+                checksum_algorithm='CRC64NVME',
             )
             logger.info(f"  Uploaded md5checksums.txt to MinIO: {s3_path}md5checksums.txt")
         else:
@@ -698,12 +714,12 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
                         logger.info(f"    ✓ Checksum verified: {actual_checksum}")
                         verified_checksum = True
                     
-                    # Upload to MinIO (store MD5 as metadata for fast future verification)
                     s3_client.upload_file(
                         minio_bucket,
                         s3_path + filename,
                         str(local_file),
-                        metadata={'md5': actual_checksum}
+                        metadata={'md5': actual_checksum},
+                        checksum_algorithm='CRC64NVME',
                     )
                     logger.info(f"    Uploaded to MinIO: {s3_path + filename}")
                     transfer_success = True
@@ -725,7 +741,8 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
                     s3_client.upload_file(
                         minio_bucket,
                         s3_path + filename,
-                        str(local_file)
+                        str(local_file),
+                        checksum_algorithm='CRC64NVME',
                     )
                     logger.info(f"    Uploaded to MinIO: {s3_path + filename}")
                     no_checksum_files.append({
@@ -767,7 +784,8 @@ def download_genome_files(entry, s3_client, local_dir, failed_transfers, no_chec
             s3_client.upload_file(
                 minio_bucket,
                 metadata_path + metadata_filename,
-                str(descriptor_file)
+                str(descriptor_file),
+                checksum_algorithm='CRC64NVME',
             )
             logger.info(f"  ✓ Uploaded {metadata_filename} to MinIO: {metadata_path}{metadata_filename}")
     

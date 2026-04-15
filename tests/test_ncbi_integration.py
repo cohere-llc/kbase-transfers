@@ -12,13 +12,10 @@ import json
 from pathlib import Path
 import tempfile
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+import pytest
 
 from kbase_transfers import MinioClient
 
-# Import functions from the download script
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "ncbi"))
 from download_genomes import (
     download_genome_files,
     get_minio_client,
@@ -29,6 +26,7 @@ from download_genomes import (
 )
 
 
+@pytest.mark.integration
 class TestNcbiIntegration(unittest.TestCase):
     """Integration test for ncbi download_genomes script."""
     

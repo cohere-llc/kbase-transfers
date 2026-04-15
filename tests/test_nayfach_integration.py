@@ -10,8 +10,7 @@ import sys
 import json
 from pathlib import Path
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+import pytest
 
 from kbase_transfers import MinioClient
 from scripts.nayfach_2020.download_and_load import (
@@ -24,6 +23,7 @@ from scripts.nayfach_2020.download_and_load import (
 )
 
 
+@pytest.mark.integration
 class TestNayfachIntegration(unittest.TestCase):
     """Integration test for nayfach_2020 script."""
     
