@@ -10,10 +10,10 @@
 
 ## Overview
 
-The `refdata_spire` namespace holds data from the **SPIRE (Seawater and Prokaryotic
-Integrated Reference and Ecology) MAG catalog** (v01, September 2023), published by
-the EMBL and available at https://spire.embl.de/. SPIRE is a global marine and
-environmental MAG catalog covering 2.8M MAGs from 95K samples.
+The `refdata_spire` namespace holds data from the **SPIRE (Sequence-based
+Planetary-scale mIcrobiome REcovery) MAG catalog** (v01, September 2023),
+published by EMBL and available at https://spire.embl.de/. SPIRE is a global
+marine and environmental MAG catalog covering 2.8M MAGs from 95K samples.
 
 Key scale:
 
