@@ -48,6 +48,6 @@ Build a reproducible coordinate-enrichment workflow that joins SPIRE study/sampl
 - Storage format: TSV artifact plus descriptor resource reference.
 - Out of scope: embedding lat/lon directly inside per-genome descriptor entries.
 
-This plan is persisted in session memory at /memories/session/plan.md and is ready for handoff to implementation.
+This plan is captured in this notes file and is ready for handoff to implementation.
 
 
