@@ -96,7 +96,6 @@ def test_enumerate_all_studies_uses_cache(tmp_path):
     cache_file.write_text(json.dumps({"studies": ["StudyA", "StudyB"]}), encoding="utf-8")
 
     studies = module.enumerate_all_studies(
-        base_url="https://example.com",
         cache_path=cache_file,
         refetch=False,
     )
@@ -138,7 +137,6 @@ def test_enumerate_all_studies_scrapes_both_pages(tmp_path):
     with patch.object(module, "_scrape_study_names_from_downloads_page",
                       return_value=sorted(fake_union)):
         studies = module.enumerate_all_studies(
-            base_url="https://example.com",
             cache_path=None,
         )
 
@@ -154,7 +152,6 @@ def test_enumerate_all_studies_writes_cache(tmp_path):
     with patch.object(module, "_scrape_study_names_from_downloads_page",
                       return_value=fake_studies):
         studies = module.enumerate_all_studies(
-            base_url="https://example.com",
             cache_path=cache_file,
         )
 

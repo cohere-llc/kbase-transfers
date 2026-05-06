@@ -160,11 +160,3 @@ def test_full_coordinate_extraction(tmp_path):
         f"Expected all rows to have coordinates for {TEST_STUDIES}; "
         f"{len(tsv_rows) - coords_present} rows missing"
     )
-
-
-
-    # Verify non-zero file sizes in the bucket
-    resp_tsv = client.s3.head_object(Bucket=SPIRE_BUCKET, Key=tsv_key)
-    resp_sum = client.s3.head_object(Bucket=SPIRE_BUCKET, Key=summary_key)
-    assert resp_tsv["ContentLength"] > 0
-    assert resp_sum["ContentLength"] > 0

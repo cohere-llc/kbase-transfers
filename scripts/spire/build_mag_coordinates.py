@@ -247,13 +247,11 @@ def _scrape_study_names_from_downloads_page(
 
 
 def enumerate_all_studies(
-    base_url: str,
     cache_path: Path | None,
     *,
     timeout: float = 30.0,
     max_retries: int = 2,
     retry_backoff: float = 0.5,
-    sleep_seconds: float = 0.05,
     refetch: bool = False,
 ) -> list[str]:
     """Return the full list of SPIRE study names.
@@ -329,7 +327,7 @@ def load_metalog_map(path: Path) -> dict[str, dict[str, str]]:
         # the primary join key, but the sequencing_db_mapping file only knows the
         # sample_alias composite key — so we register entries under both.
         alias_col: str | None = None
-        if sample_col == "spire_sample_name":
+        if normalize_field_name(sample_col) == "spire_sample_name":
             alias_col = find_column_name(
                 reader.fieldnames,
                 [c for c in METALOG_SAMPLE_COLUMN_CANDIDATES if c != "spire_sample_name"],
@@ -845,7 +843,6 @@ def main() -> None:
     if not studies:
         study_cache = cache_dir / DEFAULT_STUDY_CACHE_NAME
         studies = enumerate_all_studies(
-            base_url=args.base_url,
             cache_path=study_cache,
             timeout=args.timeout,
             max_retries=args.max_retries,
