@@ -51,21 +51,3 @@ Build a reproducible coordinate-enrichment workflow that joins SPIRE study/sampl
 This plan is persisted in session memory at /memories/session/plan.md and is ready for handoff to implementation.
 
 
-Notes:
-
-From Sebastian:
-
-
-thank you for reaching out. The data should indeed all be public, but I’ll be the first to admit that the underlying dbs are not always straightforward to navigate via the websites.
-
-There is no direct way currently to get the lat/lon (and other sample-related metadata) for each MAG; for this, it is necessary to go via the underlying samples. Here’s my suggestion:
-
-- download the study-level tabular data via API which should contain per-sample lat/lon (if we have it): https://spire.embl.de/spire/api/study/[study_name]?format=tsv where you can replace ‘[study_name]’ with each of the 741 studies that you’re interested in
-- from the resulting, pull the sample IDs that you will be interested in
-- for each sample ID of those, pull the tabular data on MAGs (incl IDs) via API: https://spire.embl.de/spire/api/sample/SAMN15803490?format=tsv 
-
-In addition, detailed, manually curated metadata for the same studies and samples (and more) is available via Metalog (metalog.embl.de) and can be mapped back to the same lists if you are so inclined. Moreover, the associated viral genomes for the same samples are on vire.embl.de with a different set of annotations; pre-computed predicted phenotypes are on MetaTraits (https://metatraits.embl.de/).
-
-I hesitate to send you a ready-made mag -> lat/lon table not because we want to keep the data under wraps in any way, but for two pragmatic reasons. First, we are currently updating and extending the datasets for a new release, including a re-computation of MAGs for all samples. We’re therefore handling different versions of things in the background, including changing sample IDs/mappings etc so it can become complicated very quickly to keep track of what’s what. With the above approach you should be able to use the (stable) public facing data and mapping that really belongs to SPIRE v1 and the associated MAGs. Second, I pointed out the additional resources (in particular Metalog) because it contains additional levels of curation, including on lat/lon data, that SPIRE itself does not always reflect. For example, Metalog distinguishes the source and granulatity of lat/lon information: it records whether exact locations (as entered by authors) were used, or whether the curated made an inference e.g. based on the city or region where sampling took place (so coordinates are less exact). Moreover, in some cases Metalog contains corrections of coordinates (if e.g. the original submitters used a drag-down approach in Excel or very obviously swapped lat and lon in their tables). This curation is a work in progress and Metalog studies get occasionally updated if additional errors are fixed, but new metadata is also added almost on a weekly basis.
-
-That said, I would be very interested in exploring more formal exchange and/or collaboration. Some people in my former team at EMBL in Heidelberg and some current collaborators are indeed (loosely) working on pangenomics of these genome sets as well, so at the very least it might be interesting to have an exchange about who’s interested in what.
