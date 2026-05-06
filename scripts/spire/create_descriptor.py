@@ -37,6 +37,8 @@ from kbase_transfers import validate_descriptor
 
 DATASET_VERSION = "v01"
 DATASET_DATE = "2023-09"
+COORDINATES_TSV_NAME = "spire_v01_mag_coordinates.tsv"
+COORDINATES_SUMMARY_NAME = "spire_v01_mag_coordinates_summary.json"
 
 
 
@@ -73,6 +75,40 @@ def build_genome_resources(genome_dir: Path) -> list[dict]:
                 "bytes": fa_path.stat().st_size,
             }
         )
+    return resources
+
+
+def build_optional_resources(
+    coordinates_tsv: Path | None, coordinates_summary: Path | None
+) -> list[dict]:
+    """Build optional descriptor resources for coordinate artifacts."""
+    resources = []
+
+    if coordinates_tsv and coordinates_tsv.exists():
+        resources.append(
+            {
+                "name": coordinates_tsv.name.lower().replace(".", "-").replace("_", "-"),
+                "path": coordinates_tsv.name,
+                "description": (
+                    "SPIRE MAG-to-sample coordinate mappings (one row per MAG-sample pair) "
+                    "with provenance fields and optional Metalog enrichment."
+                ),
+                "mediatype": "text/tab-separated-values",
+                "bytes": coordinates_tsv.stat().st_size,
+            }
+        )
+
+    if coordinates_summary and coordinates_summary.exists():
+        resources.append(
+            {
+                "name": coordinates_summary.name.lower().replace(".", "-").replace("_", "-"),
+                "path": coordinates_summary.name,
+                "description": "Summary metrics for SPIRE MAG coordinate extraction coverage.",
+                "mediatype": "application/json",
+                "bytes": coordinates_summary.stat().st_size,
+            }
+        )
+
     return resources
 
 
@@ -243,7 +279,11 @@ def build_credit(timestamp: int) -> dict:
 # Main descriptor builder
 # ---------------------------------------------------------------------------
 
-def create_descriptor(genome_dir: Path) -> dict:
+def create_descriptor(
+    genome_dir: Path,
+    coordinates_tsv: Path | None = None,
+    coordinates_summary: Path | None = None,
+) -> dict:
     """Build and validate the full frictionless data package descriptor."""
     timestamp = int(datetime.now().timestamp())
 
@@ -251,6 +291,11 @@ def create_descriptor(genome_dir: Path) -> dict:
     resources = build_genome_resources(genome_dir)
     if not resources:
         raise ValueError(f"No .fa.gz files found in {genome_dir}")
+
+    optional_resources = build_optional_resources(coordinates_tsv, coordinates_summary)
+    if optional_resources:
+        print(f"Adding {len(optional_resources)} optional resource(s)...")
+        resources.extend(optional_resources)
 
     print("Building credit metadata...")
     credit = build_credit(timestamp)
@@ -305,6 +350,22 @@ def main():
             "Defaults to spire_v01_datapackage.json in the parent of --data-dir."
         ),
     )
+    parser.add_argument(
+        "--coordinates-tsv",
+        default=None,
+        help=(
+            "Optional path to SPIRE coordinates TSV artifact. "
+            f"Defaults to {COORDINATES_TSV_NAME} in the parent of --data-dir if present."
+        ),
+    )
+    parser.add_argument(
+        "--coordinates-summary",
+        default=None,
+        help=(
+            "Optional path to SPIRE coordinates summary JSON artifact. "
+            f"Defaults to {COORDINATES_SUMMARY_NAME} in the parent of --data-dir if present."
+        ),
+    )
     args = parser.parse_args()
 
     genome_dir = Path(args.data_dir)
@@ -318,12 +379,30 @@ def main():
         else genome_dir.parent / "spire_v01_datapackage.json"
     )
 
+    default_coordinates_tsv = genome_dir.parent / COORDINATES_TSV_NAME
+    coordinates_tsv = (
+        Path(args.coordinates_tsv)
+        if args.coordinates_tsv
+        else (default_coordinates_tsv if default_coordinates_tsv.exists() else None)
+    )
+
+    default_coordinates_summary = genome_dir.parent / COORDINATES_SUMMARY_NAME
+    coordinates_summary = (
+        Path(args.coordinates_summary)
+        if args.coordinates_summary
+        else (default_coordinates_summary if default_coordinates_summary.exists() else None)
+    )
+
     print(f"Creating SPIRE v01 data package descriptor...")
     print(f"  Genome directory : {genome_dir}")
     print(f"  Output file      : {output_path}")
+    if coordinates_tsv:
+        print(f"  Coordinates TSV  : {coordinates_tsv}")
+    if coordinates_summary:
+        print(f"  Coord summary    : {coordinates_summary}")
     print()
 
-    descriptor = create_descriptor(genome_dir)
+    descriptor = create_descriptor(genome_dir, coordinates_tsv, coordinates_summary)
 
     with open(output_path, "w") as f:
         json.dump(descriptor, f, indent=2)
